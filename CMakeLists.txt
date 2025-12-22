@@ -18,11 +18,11 @@ set(CMAKE_C_FLAGS_RELEASE "")
 set(CMAKE_C_FLAGS_DEBUG "")
 
 set(SRC
-	main.c random.c
+	main.c random.c aes.c
 )
 
 set(H
-	random.h
+	random.h aes.h
 )
 
 set(FILES_FMT ${SRC} ${H})
