@@ -37,6 +37,7 @@ typedef struct aes_keys_t
 
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
+/*
 static const byte POLYNOM_INV[]                                    = {
     0x00, 0x01, 0x8d, 0xf6, 0xcb, 0x52, 0x7b, 0xd1, 0xe8, 0x4f, 0x29, 0xc0,
     0xb0, 0xe1, 0xe5, 0xc7, 0x74, 0xb4, 0xaa, 0x4b, 0x99, 0x2b, 0x60, 0x5f,
@@ -61,6 +62,7 @@ static const byte POLYNOM_INV[]                                    = {
     0x5b, 0x23, 0x38, 0x34, 0x68, 0x46, 0x03, 0x8c, 0xdd, 0x9c, 0x7d, 0xa0,
     0xcd, 0x1a, 0x41, 0x1c
 };
+*/
 
 static const byte S_BOX[] = {
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b,
@@ -163,12 +165,12 @@ static void aes_block_round_n(
 
 /* --- AES Keys */
 
-/* g function for 128 or 192 bit key schedule(s) */
+static word aes_keys_schedule_h(word w);
 static word aes_keys_schedule_g(word w, unsigned int i);
 
-static void aes_keys_schedule_128_tr(word* W);
-static void aes_keys_schedule_192_tr(word* W);
-static void aes_keys_schedule_256_tr(word* W);
+static word aes_keys_schedule_g(word w, unsigned int i);
+
+static void aes_keys_schedule_tr(aes_keys_p KEY, word* W, unsigned int wN);
 
 static void aes_keys_schedule_128(aes_keys_p KEY, byte* extern_key);
 static void aes_keys_schedule_192(aes_keys_p KEY, byte* extern_key);
@@ -343,14 +345,14 @@ static void aes_block_shift_rows(aes_block_p dst, aes_block_p src)
 static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
 {
     const byte* matrix_row;
-    const byte* col;
+    const byte* state_column;
     int         i;
 
     for (i = 0; i < AES_BLOCK_SIZE; ++i)
     {
-        col          = &src->data[i & ~3];
+        state_column    = &src->data[i & ~3];
         matrix_row   = &MIX_COL_MATRIX[(i & 3) * 4];
-        dst->data[i] = polynom_scalar_prod(matrix_row, col, 4);
+        dst->data[i] = polynom_scalar_prod(matrix_row, state_column, 4);
     }
 }
 
@@ -419,6 +421,18 @@ static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM)
     }
 }
 
+static word aes_keys_schedule_h(word w)
+{
+    byte* vTOw = (byte*)&w;
+
+    vTOw[0]    = S_BOX[vTOw[0]];
+    vTOw[1]    = S_BOX[vTOw[1]];
+    vTOw[2]    = S_BOX[vTOw[2]];
+    vTOw[3]    = S_BOX[vTOw[3]];
+
+    return w;
+}
+
 static word aes_keys_schedule_g(word w, unsigned int i)
 {
     byte* vTOw = (byte*)&w;
@@ -441,17 +455,44 @@ static word aes_keys_schedule_g(word w, unsigned int i)
     return res;
 }
 
-static void aes_keys_schedule_128_tr(word* W)
+static void aes_keys_schedule_tr(aes_keys_p KEY, word* W, unsigned int wN)
 {
     unsigned int i;
     unsigned int j;
 
-    for (i = 1; i <= 10; ++i)
-    {
-        W[4 * i] = W[4 * (i - 1)] ^ aes_keys_schedule_g(W[4 * i - 1], i);
+    unsigned int IT = KEY->N == 11 ? 10 : 8;
+    unsigned int SZ = KEY->N == 11 ? 4 : 6;
 
-        for (j = 1; j <= 3; ++j)
-            W[4 * i + j] = W[4 * i + j - 1] ^ W[4 * (i - 1) + j];
+    switch (KEY->N)
+    {
+    case 11:
+        IT = 10;
+        SZ = 4;
+        break;
+    case 13:
+        IT = 8;
+        SZ = 6;
+        break;
+    case 15:
+        IT = 7;
+        SZ = 8;
+        break;
+    default:
+        EXIT(FATAL_LOGIC, "aes_keys_schedule_tr", "round number out of domain");
+    }
+
+    for (i = 1; i <= IT; ++i)
+    {
+        W[SZ * i] = W[SZ * (i - 1)] ^ aes_keys_schedule_g(W[SZ * i - 1], i);
+
+        for (j = 1; j <= SZ - 1 && SZ * i + j < wN; ++j)
+        {
+            if (KEY->N == 15 && j == 4)
+                W[SZ * i + j] = aes_keys_schedule_h(W[SZ * i + j - 1]) ^
+                                W[SZ * (i - 1) + j];
+            else
+                W[SZ * i + j] = W[SZ * i + j - 1] ^ W[SZ * (i - 1) + j];
+        }
     }
 }
 
@@ -462,40 +503,64 @@ static void aes_keys_schedule_128(aes_keys_p KEY, byte* extern_key)
     word      W[44] = {0};
 
     memcpy(W, extern_key, (size_t)N);
-    memcpy(&KEY->subkeys[0], extern_key, (size_t)N);
+    memcpy(&KEY->subkeys[0], extern_key, sizeof(KEY->subkeys[0]));
 
-    aes_keys_schedule_128_tr(W);
+    aes_keys_schedule_tr(KEY, W, 44);
 
     for (i = 1; i < KEY->N; ++i)
-        memcpy(&KEY->subkeys[i], &W[i * 4], (size_t)N);
-}
-
-static void aes_keys_schedule_192_tr(word* W)
-{
-    (void)W;
-
-    EXIT(NIY, "aes_keys_schedule_192_tr", "not implemented, yet");
+        memcpy(&KEY->subkeys[i], &W[i * 4], sizeof(KEY->subkeys[0]));
 }
 
 static void aes_keys_schedule_192(aes_keys_p KEY, byte* extern_key)
 {
-    (void)KEY;
-    (void)extern_key;
+    const int N     = 24;
+    int       i     = 0;
+    word      W[52] = {0};
 
-    EXIT(NIY, "aes_keys_schedule_192", "not implemented, yet");
-}
+    memcpy(W, extern_key, (size_t)N);
+    memcpy(&KEY->subkeys[0], extern_key, sizeof(KEY->subkeys[0]));
 
-static void aes_keys_schedule_256_tr(word* W)
-{
-    (void)W;
+    aes_keys_schedule_tr(KEY, W, 52);
 
-    EXIT(NIY, "aes_keys_schedule_256_tr", "not implemented, yet");
+    for (i = 1; i < KEY->N; ++i)
+        memcpy(&KEY->subkeys[i], &W[i * 4], sizeof(KEY->subkeys[0]));
 }
 
 static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key)
 {
-    (void)KEY;
-    (void)extern_key;
+    const int N     = 32;
+    int       i     = 0;
+    word      W[60] = {0};
 
-    EXIT(NIY, "aes_keys_schedule_256", "not implemented, yet");
+    memcpy(W, extern_key, (size_t)N);
+    memcpy(&KEY->subkeys[0], extern_key, sizeof(KEY->subkeys[0]));
+
+    aes_keys_schedule_tr(KEY, W, 60);
+
+    for (i = 1; i < KEY->N; ++i)
+        memcpy(&KEY->subkeys[i], &W[i * 4], sizeof(KEY->subkeys[0]));
+}
+
+void aes_encrypt(
+    char* plain, char* enc, unsigned char* key, int plainN, int keyN
+)
+{
+    struct aes_block_t block[2];
+    struct aes_keys_t  KEY;
+    int                iPlain;
+    int                i;
+
+    aes_keys_init(&KEY, key, keyN);
+
+    for (iPlain = 0; iPlain < plainN; iPlain += 16)
+    {
+        memcpy(block[0].data, &plain[iPlain], sizeof(block[0].data));
+
+        aes_block_key_addition(&block[1], &block[0], &KEY.subkeys[0]);
+
+        for (i = 0; i < KEY.N - 1; ++i)
+            aes_block_round_n(&block[i & 1], &block[1 - (i & 1)], &KEY, i + 1);
+
+        memcpy(&enc[iPlain], block[(i - 1) & 1].data, sizeof(block[0].data));
+    }
 }
