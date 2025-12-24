@@ -11,7 +11,7 @@
 
 #define EXIT(code, context, str)                                               \
     {                                                                          \
-        fprintf(stderr, "%s: %s", (context), (str));                           \
+        fprintf(stderr, "%s: %s\n", (context), (str));                         \
         exit((code));                                                          \
     }
 

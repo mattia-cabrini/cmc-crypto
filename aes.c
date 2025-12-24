@@ -2,6 +2,7 @@
 
 #include "aes.h"
 #include "error.h"
+#include <string.h>
 
 #define AES_BLOCK_SIZE 16
 
@@ -17,6 +18,22 @@ struct polynom_red_cache_item_t
     byte p;
     byte set;
 };
+
+typedef uint32_t word;
+
+typedef struct aes_keys_t
+{
+    /* 0: pre
+     * 1: after round 1
+     * 2: after round 2
+     * ...
+     * R: after round R
+     * */
+    struct aes_block_t subkeys[15];
+
+    /* How many subkeys are there, number of rounds + 1 */
+    int N;
+}* aes_keys_p;
 
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
@@ -131,11 +148,35 @@ static void aes_block_shift_rows(aes_block_p dst, aes_block_p src);
 /* `dst` and `src` must be different */
 static void aes_block_mix_columns(aes_block_p dst, aes_block_p src);
 
-/* `dst` and `src` must be different */
-static void aes_block_diffusion(aes_block_p dst, aes_block_p src);
+/* `last_r` tells if it is the last round.
+ * `dst` and `src` must be different. */
+static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r);
 
 /* `dst` and `src` must be different */
-static void aes_block_round_n(aes_block_p dst, aes_block_p src, int round_no);
+static void
+aes_block_key_addition(aes_block_p dst, aes_block_p src, aes_block_p key);
+
+/* `dst` and `src` must be different */
+static void aes_block_round_n(
+    aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
+);
+
+/* --- AES Keys */
+
+/* g function for 128 or 192 bit key schedule(s) */
+static word aes_keys_schedule_g(word w, unsigned int i);
+
+static void aes_keys_schedule_128_tr(word* W);
+static void aes_keys_schedule_192_tr(word* W);
+static void aes_keys_schedule_256_tr(word* W);
+
+static void aes_keys_schedule_128(aes_keys_p KEY, byte* extern_key);
+static void aes_keys_schedule_192(aes_keys_p KEY, byte* extern_key);
+static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key);
+
+/* Initialize `KEY` with `extern_key`: `extern_key` is the AES encryption key
+ * and `DIM` is its value expressed in bytes. */
+static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM);
 
 /* --- IMPL */
 
@@ -313,23 +354,148 @@ static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
     }
 }
 
-static void aes_block_diffusion(aes_block_p dst, aes_block_p src)
+static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r)
 {
     struct aes_block_t shifted;
 
-    aes_block_shift_rows(&shifted, src);
-    aes_block_mix_columns(dst, &shifted);
+    if (!last_r)
+    {
+        aes_block_shift_rows(&shifted, src);
+        aes_block_mix_columns(dst, &shifted);
+    }
+    else
+    {
+        aes_block_shift_rows(dst, src);
+    }
 }
 
-static void aes_block_round_n(aes_block_p dst, aes_block_p src, int round_no)
+static void
+aes_block_key_addition(aes_block_p dst, aes_block_p src, aes_block_p key)
+{
+    int i;
+
+    for (i = 0; i < AES_BLOCK_SIZE; ++i)
+        dst->data[i] = src->data[i] ^ key->data[i];
+}
+
+static void aes_block_round_n(
+    aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
+)
 {
     struct aes_block_t tmp_sub, tmp_diff;
 
+    if (round_no < 1 || round_no > keys->N - 1)
+        EXIT(FATAL_LOGIC, "aes_block_round_n", "round_no out of bound");
+
     aes_block_byte_substitution(&tmp_sub, src);
-    aes_block_diffusion(&tmp_diff, &tmp_sub);
+    aes_block_diffusion(&tmp_diff, &tmp_sub, round_no == keys->N - 1);
 
-    (void)dst;
-    (void)round_no;
+    aes_block_key_addition(dst, &tmp_diff, &keys->subkeys[round_no]);
+}
 
-    EXIT(NIY, "aes_block_round_n", "not implemented, yet");
+static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM)
+{
+    switch (DIM)
+    {
+    case 32:
+        KEY->N = 15;
+        aes_keys_schedule_256(KEY, extern_key);
+        break;
+    case 24:
+        KEY->N = 13;
+        aes_keys_schedule_192(KEY, extern_key);
+        break;
+    case 16:
+        KEY->N = 11;
+        aes_keys_schedule_128(KEY, extern_key);
+        break;
+    default:
+        EXIT(
+            FATAL_LOGIC,
+            "aes_keys_init",
+            "incorrect key size (the only allowed key lengths are 16B (128), "
+            "24B (192) and 32B (256)"
+        );
+    }
+}
+
+static word aes_keys_schedule_g(word w, unsigned int i)
+{
+    byte* vTOw = (byte*)&w;
+    word  res;
+    byte* shifted = (byte*)&res;
+    byte  RC[2]   = {1, 0};
+    byte  RCi;
+
+    shifted[0] = S_BOX[vTOw[1]];
+    shifted[1] = S_BOX[vTOw[2]];
+    shifted[2] = S_BOX[vTOw[3]];
+    shifted[3] = S_BOX[vTOw[0]];
+
+    if (i)
+        polynom_shift(RC, RC, (int)(i - 1));
+    RCi = polynom_red(RC);
+
+    shifted[0] ^= RCi;
+
+    return res;
+}
+
+static void aes_keys_schedule_128_tr(word* W)
+{
+    unsigned int i;
+    unsigned int j;
+
+    for (i = 1; i <= 10; ++i)
+    {
+        W[4 * i] = W[4 * (i - 1)] ^ aes_keys_schedule_g(W[4 * i - 1], i);
+
+        for (j = 1; j <= 3; ++j)
+            W[4 * i + j] = W[4 * i + j - 1] ^ W[4 * (i - 1) + j];
+    }
+}
+
+static void aes_keys_schedule_128(aes_keys_p KEY, byte* extern_key)
+{
+    const int N     = 16;
+    int       i     = 0;
+    word      W[44] = {0};
+
+    memcpy(W, extern_key, (size_t)N);
+    memcpy(&KEY->subkeys[0], extern_key, (size_t)N);
+
+    aes_keys_schedule_128_tr(W);
+
+    for (i = 1; i < KEY->N; ++i)
+        memcpy(&KEY->subkeys[i], &W[i * 4], (size_t)N);
+}
+
+static void aes_keys_schedule_192_tr(word* W)
+{
+    (void)W;
+
+    EXIT(NIY, "aes_keys_schedule_192_tr", "not implemented, yet");
+}
+
+static void aes_keys_schedule_192(aes_keys_p KEY, byte* extern_key)
+{
+    (void)KEY;
+    (void)extern_key;
+
+    EXIT(NIY, "aes_keys_schedule_192", "not implemented, yet");
+}
+
+static void aes_keys_schedule_256_tr(word* W)
+{
+    (void)W;
+
+    EXIT(NIY, "aes_keys_schedule_256_tr", "not implemented, yet");
+}
+
+static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key)
+{
+    (void)KEY;
+    (void)extern_key;
+
+    EXIT(NIY, "aes_keys_schedule_256", "not implemented, yet");
 }
