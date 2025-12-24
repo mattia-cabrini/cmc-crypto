@@ -22,7 +22,7 @@ set(SRC
 )
 
 set(H
-	random.h aes.h
+	random.h aes.h error.h
 )
 
 set(FILES_FMT ${SRC} ${H})

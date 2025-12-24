@@ -1,0 +1,18 @@
+#ifndef CMC_CRYPTO_ERROR_H_INCLUDED
+#define CMC_CRYPTO_ERROR_H_INCLUDED
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#define OK 0
+#define FATAL_GENERIC 1
+#define FATAL_LOGIC 2
+#define NIY 3
+
+#define EXIT(code, context, str)                                               \
+    {                                                                          \
+        fprintf(stderr, "%s: %s", (context), (str));                           \
+        exit((code));                                                          \
+    }
+
+#endif /* CMC_CRYPTO_ERROR_H_INCLUDED */

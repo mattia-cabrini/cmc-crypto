@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "aes.h"
+#include "error.h"
 
 #define AES_BLOCK_SIZE 16
 
@@ -69,6 +70,25 @@ static const byte S_BOX[] = {
     0xb0, 0x54, 0xbb, 0x16
 };
 
+static const byte MIX_COL_MATRIX[] = {
+    0x02,
+    0x03,
+    0x01,
+    0x01,
+    0x01,
+    0x02,
+    0x03,
+    0x01,
+    0x01,
+    0x01,
+    0x02,
+    0x03,
+    0x03,
+    0x01,
+    0x01,
+    0x02
+};
+
 /* --- Utility Functions */
 
 /* Return a byte with only the n-th bit set to the same value as `b` */
@@ -86,15 +106,19 @@ static byte byte_set(byte b, int state, int n);
 /* Return the sum of `p` and `q`, treated as polynomials in GF(2^8) */
 static byte polynom_sum(byte p, byte q);
 
-/* Compute the multiplication `p` × `q`, not reduced, and store into `RES` */
-static void polynom_mul(byte* RES, byte p, byte q);
-
-/* Shift a 2-bytes polynomial by `n` to the left (multiplication against 2^n) */
-static void polynom_shift(byte* DST, byte* SRC, int n);
-
 /* Return the reduction of the 2-bytes `P`.
  * Reduction in modulo x^8 + x^4 + x^3 + x + 1 */
 static byte polynom_red(byte* P);
+
+/* Return the scalar product between `P` and `Q`, reduced.
+ * `P` and `Q` are two vector of polynomials and have size `D`. */
+static byte polynom_scalar_prod(const byte* P, const byte* Q, int D);
+
+/* Return the multiplication `p` × `q`, reduced */
+static byte polynom_mul(byte p, byte q);
+
+/* Shift a 2-bytes polynomial by `n` to the left (multiplication against 2^n) */
+static void polynom_shift(byte* DST, byte* SRC, int n);
 
 /* --- AES Block */
 
@@ -109,6 +133,9 @@ static void aes_block_mix_columns(aes_block_p dst, aes_block_p src);
 
 /* `dst` and `src` must be different */
 static void aes_block_diffusion(aes_block_p dst, aes_block_p src);
+
+/* `dst` and `src` must be different */
+static void aes_block_round_n(aes_block_p dst, aes_block_p src, int round_no);
 
 /* --- IMPL */
 
@@ -130,13 +157,14 @@ static byte byte_set(byte b, int state, int n)
     return (byte)(b & state);
 }
 
-static void polynom_mul(byte* RES, byte p, byte q)
+static byte polynom_mul(byte p, byte q)
 {
     int  current_exp;
     int  iP;
     int  iQ;
     byte tmp_1;
     byte tmp_2;
+    byte RES[2];
 
     RES[0] = RES[1] = 0;
 
@@ -172,6 +200,8 @@ static void polynom_mul(byte* RES, byte p, byte q)
                 RES[0] = byte_set(RES[0], tmp_1 ^ tmp_2, current_exp);
         }
     }
+
+    return polynom_red(RES);
 }
 
 static void polynom_shift(byte* DST, byte* SRC, int n)
@@ -227,6 +257,20 @@ static byte polynom_red(byte* P)
     return cached->p;
 }
 
+static byte polynom_scalar_prod(const byte* P, const byte* Q, int D)
+{
+    byte res = 0x00;
+    int  i;
+
+    if (D <= 0)
+        EXIT(FATAL_LOGIC, "polynom_scalar_prod", "D <= 0");
+
+    for (i = 0; i < D; ++i)
+        res = polynom_sum(res, polynom_mul(P[i], Q[i]));
+
+    return res;
+}
+
 static void aes_block_byte_substitution(aes_block_p dst, aes_block_p src)
 {
     int i;
@@ -257,7 +301,16 @@ static void aes_block_shift_rows(aes_block_p dst, aes_block_p src)
 
 static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
 {
-    /* NOT IMPLEMENTED, YET */
+    const byte* matrix_row;
+    const byte* col;
+    int         i;
+
+    for (i = 0; i < AES_BLOCK_SIZE; ++i)
+    {
+        col          = &src->data[i & ~3];
+        matrix_row   = &MIX_COL_MATRIX[(i & 3) * 4];
+        dst->data[i] = polynom_scalar_prod(matrix_row, col, 4);
+    }
 }
 
 static void aes_block_diffusion(aes_block_p dst, aes_block_p src)
@@ -266,4 +319,17 @@ static void aes_block_diffusion(aes_block_p dst, aes_block_p src)
 
     aes_block_shift_rows(&shifted, src);
     aes_block_mix_columns(dst, &shifted);
+}
+
+static void aes_block_round_n(aes_block_p dst, aes_block_p src, int round_no)
+{
+    struct aes_block_t tmp_sub, tmp_diff;
+
+    aes_block_byte_substitution(&tmp_sub, src);
+    aes_block_diffusion(&tmp_diff, &tmp_sub);
+
+    (void)dst;
+    (void)round_no;
+
+    EXIT(NIY, "aes_block_round_n", "not implemented, yet");
 }
