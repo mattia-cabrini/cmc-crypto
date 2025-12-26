@@ -163,6 +163,8 @@ static void aes_block_round_n(
     aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
 );
 
+static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY);
+
 /* --- AES Keys */
 
 static word aes_keys_schedule_h(word w);
@@ -350,7 +352,7 @@ static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
 
     for (i = 0; i < AES_BLOCK_SIZE; ++i)
     {
-        state_column    = &src->data[i & ~3];
+        state_column = &src->data[i & ~3];
         matrix_row   = &MIX_COL_MATRIX[(i & 3) * 4];
         dst->data[i] = polynom_scalar_prod(matrix_row, state_column, 4);
     }
@@ -541,26 +543,114 @@ static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key)
         memcpy(&KEY->subkeys[i], &W[i * 4], sizeof(KEY->subkeys[0]));
 }
 
-void aes_encrypt(
-    char* plain, char* enc, unsigned char* key, int plainN, int keyN
-)
+static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
 {
     struct aes_block_t block[2];
-    struct aes_keys_t  KEY;
-    int                iPlain;
     int                i;
+
+    aes_block_key_addition(&block[1], src, &KEY->subkeys[0]);
+
+    for (i = 0; i < KEY->N - 1; ++i)
+        /* Ping-Pong 1-0, 0-1, 1-0, 0-1, ... */
+        aes_block_round_n(&block[i & 1], &block[1 - (i & 1)], KEY, i + 1);
+
+    memcpy(dst, &block[(i - 1) & 1], sizeof(struct aes_block_t));
+}
+
+void aes_encrypt(
+    char*          plain,
+    char*          enc,
+    unsigned char* key,
+    int            plainN,
+    int            encN,
+    int            keyN,
+    int            pad_mode,
+    int            block_mode
+)
+{
+    struct aes_block_t src;
+    struct aes_block_t dst;
+    struct aes_keys_t  KEY;
+
+    char error_message[1024];
+    int  iPlain;
+    byte pad_byte = 0x00;
+
+    if (block_mode != AES_MODE_ECB)
+        EXIT(
+            FATAL_LOGIC,
+            "aes_encrypt",
+            "mode different from ECB are not supported, yet"
+        );
+
+    if (encN < plainN || plainN < 0 || encN < 0)
+    {
+        sprintf(
+            error_message,
+            "enc has size %d and plaintext has size %d: incompatible or wrong",
+            encN,
+            plainN
+        );
+        EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
+    }
+
+    switch (pad_mode)
+    {
+    case AES_PAD_NONE:
+        if (plainN % 16 != 0)
+        {
+            sprintf(
+                error_message,
+                "padding mode is NONE but plaintext size is (%d)",
+                plainN
+            );
+            EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
+        }
+        break;
+    case AES_PAD_PKCS7:
+        if (encN < plainN + (plainN % 16 == 0 ? 16 : 16 - (plainN % 16)))
+        {
+            sprintf(
+                error_message,
+                "enc has size %d and plaintext has size %d: wrong for PKCS#7",
+                encN,
+                plainN
+            );
+            EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
+        }
+        break;
+    default:
+        EXIT(FATAL_LOGIC, "aes_encrypt", "padding mode not supported");
+    }
 
     aes_keys_init(&KEY, key, keyN);
 
-    for (iPlain = 0; iPlain < plainN; iPlain += 16)
+    for (iPlain = 0; iPlain < plainN; iPlain += AES_BLOCK_SIZE)
     {
-        memcpy(block[0].data, &plain[iPlain], sizeof(block[0].data));
+        /* Last block -> handling padding */
+        if (iPlain + AES_BLOCK_SIZE >= plainN)
+            pad_byte = (byte)(AES_BLOCK_SIZE - (plainN - iPlain));
 
-        aes_block_key_addition(&block[1], &block[0], &KEY.subkeys[0]);
+        memcpy(src.data, &plain[iPlain], (size_t)(AES_BLOCK_SIZE - pad_byte));
 
-        for (i = 0; i < KEY.N - 1; ++i)
-            aes_block_round_n(&block[i & 1], &block[1 - (i & 1)], &KEY, i + 1);
+        if (pad_byte > 0)
+            memset(src.data + (AES_BLOCK_SIZE - pad_byte), pad_byte, pad_byte);
 
-        memcpy(&enc[iPlain], block[(i - 1) & 1].data, sizeof(block[0].data));
+        aes_block_encrypt(&dst, &src, &KEY);
+
+        memcpy(&enc[iPlain], dst.data, sizeof(src.data));
+    }
+
+    switch (pad_mode)
+    {
+    case AES_PAD_PKCS7:
+        if (pad_byte != 0)
+            break;
+
+        memset(src.data, 0x10, AES_BLOCK_SIZE);
+        aes_block_encrypt(&dst, &src, &KEY);
+        memcpy(&enc[iPlain], dst.data, sizeof(src.data));
+
+        break;
     }
 }
