@@ -37,6 +37,10 @@ typedef struct aes_keys_t
 
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
+const char* AES_ERR_COLLECTION[]                                   = {
+    "", "padding character is out of bound for PKCS#7"
+};
+
 /*
 static const byte POLYNOM_INV[]                                    = {
     0x00, 0x01, 0x8d, 0xf6, 0xcb, 0x52, 0x7b, 0xd1, 0xe8, 0x4f, 0x29, 0xc0,
@@ -89,6 +93,31 @@ static const byte S_BOX[] = {
     0xb0, 0x54, 0xbb, 0x16
 };
 
+static const byte S_BOX_INV[] = {
+    0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e,
+    0x81, 0xf3, 0xd7, 0xfb, 0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87,
+    0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb, 0x54, 0x7b, 0x94, 0x32,
+    0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
+    0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49,
+    0x6d, 0x8b, 0xd1, 0x25, 0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16,
+    0xd4, 0xa4, 0x5c, 0xcc, 0x5d, 0x65, 0xb6, 0x92, 0x6c, 0x70, 0x48, 0x50,
+    0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84,
+    0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05,
+    0xb8, 0xb3, 0x45, 0x06, 0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02,
+    0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b, 0x3a, 0x91, 0x11, 0x41,
+    0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73,
+    0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8,
+    0x1c, 0x75, 0xdf, 0x6e, 0x47, 0xf1, 0x1a, 0x71, 0x1d, 0x29, 0xc5, 0x89,
+    0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b, 0xfc, 0x56, 0x3e, 0x4b,
+    0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4,
+    0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59,
+    0x27, 0x80, 0xec, 0x5f, 0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d,
+    0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef, 0xa0, 0xe0, 0x3b, 0x4d,
+    0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+    0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63,
+    0x55, 0x21, 0x0c, 0x7d
+};
+
 static const byte MIX_COL_MATRIX[] = {
     0x02,
     0x03,
@@ -106,6 +135,25 @@ static const byte MIX_COL_MATRIX[] = {
     0x01,
     0x01,
     0x02
+};
+
+static const byte INV_MIX_COL_MATRIX[] = {
+    0x0E,
+    0x0B,
+    0x0D,
+    0x09,
+    0x09,
+    0x0E,
+    0x0B,
+    0x0D,
+    0x0D,
+    0x09,
+    0x0E,
+    0x0B,
+    0x0B,
+    0x0D,
+    0x09,
+    0x0E
 };
 
 /* --- Utility Functions */
@@ -141,18 +189,48 @@ static void polynom_shift(byte* DST, byte* SRC, int n);
 
 /* --- AES Block */
 
-/* `dst` and `src` must be different */
-static void aes_block_byte_substitution(aes_block_p dst, aes_block_p src);
+/* `dst`: destination block;
+ * `src`: source block;
+ * `BOX`: S-Box to use
+ *
+ * This function can perform both the byte substitution and its inverse
+ * algorithm. In fact, both algorithms consist of a simple byte-to-byte mapping
+ * defined by a byte array. What algorithm is performed depends on the `BOX`
+ * passed as parameter.
+ *
+ * S_BOX -> byte substitusion;
+ * S_BIX_INV -> S_BOX^-1.
+ *
+ * `dst` and `src` must be different */
+static void
+aes_block_byte_substitution(aes_block_p dst, aes_block_p src, const byte* BOX);
 
 /* `dst` and `src` must be different */
 static void aes_block_shift_rows(aes_block_p dst, aes_block_p src);
+static void aes_block_shift_rows_inv(aes_block_p dst, aes_block_p src);
 
-/* `dst` and `src` must be different */
-static void aes_block_mix_columns(aes_block_p dst, aes_block_p src);
+/* `dst`: destination block;
+ * `src`: source block;
+ * `M`: mix matrix.
+ *
+ * This function can perform both the MixColumn and InvMixColumn algorithm. In
+ * fact, both of them are merely a matrix-vector multiplication, hence the two
+ * of them can be selected by passing the appropriate mix matrix as parameter.
+ *
+ * `dst` and `src` must be different */
+static void
+aes_block_mix_columns(aes_block_p dst, aes_block_p src, const byte* M);
 
 /* `last_r` tells if it is the last round.
  * `dst` and `src` must be different. */
 static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r);
+
+/* `last_r` tells if it is the last round and refers to the last *encryption*
+ * round, that happens to be the first one in decryption.
+ *
+ * `dst` and `src` must be different. */
+static void
+aes_block_diffusion_inv(aes_block_p dst, aes_block_p src, int last_r);
 
 /* `dst` and `src` must be different */
 static void
@@ -163,7 +241,16 @@ static void aes_block_round_n(
     aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
 );
 
+/* `round_n` refers to the *encryption* round number, hence in goes backward in
+ * decryption.
+ *
+ * `dst` and `src` must be different */
+static void aes_block_round_n_inv(
+    aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
+);
+
 static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY);
+static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY);
 
 /* --- AES Keys */
 
@@ -316,12 +403,13 @@ static byte polynom_scalar_prod(const byte* P, const byte* Q, int D)
     return res;
 }
 
-static void aes_block_byte_substitution(aes_block_p dst, aes_block_p src)
+static void
+aes_block_byte_substitution(aes_block_p dst, aes_block_p src, const byte* BOX)
 {
     int i;
 
     for (i = 0; i < AES_BLOCK_SIZE; ++i)
-        dst->data[i] = S_BOX[src->data[i]];
+        dst->data[i] = BOX[src->data[i]];
 }
 
 static void aes_block_shift_rows(aes_block_p dst, aes_block_p src)
@@ -344,7 +432,28 @@ static void aes_block_shift_rows(aes_block_p dst, aes_block_p src)
     dst->data[15] = src->data[11];
 }
 
-static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
+static void aes_block_shift_rows_inv(aes_block_p dst, aes_block_p src)
+{
+    dst->data[0]  = src->data[0];
+    dst->data[5]  = src->data[1];
+    dst->data[10] = src->data[2];
+    dst->data[15] = src->data[3];
+    dst->data[4]  = src->data[4];
+    dst->data[9]  = src->data[5];
+    dst->data[14] = src->data[6];
+    dst->data[3]  = src->data[7];
+    dst->data[8]  = src->data[8];
+    dst->data[13] = src->data[9];
+    dst->data[2]  = src->data[10];
+    dst->data[7]  = src->data[11];
+    dst->data[12] = src->data[12];
+    dst->data[1]  = src->data[13];
+    dst->data[6]  = src->data[14];
+    dst->data[11] = src->data[15];
+}
+
+static void
+aes_block_mix_columns(aes_block_p dst, aes_block_p src, const byte* M)
 {
     const byte* matrix_row;
     const byte* state_column;
@@ -353,7 +462,7 @@ static void aes_block_mix_columns(aes_block_p dst, aes_block_p src)
     for (i = 0; i < AES_BLOCK_SIZE; ++i)
     {
         state_column = &src->data[i & ~3];
-        matrix_row   = &MIX_COL_MATRIX[(i & 3) * 4];
+        matrix_row   = &M[(i & 3) * 4];
         dst->data[i] = polynom_scalar_prod(matrix_row, state_column, 4);
     }
 }
@@ -362,15 +471,25 @@ static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r)
 {
     struct aes_block_t shifted;
 
+    aes_block_shift_rows(&shifted, src);
+
     if (!last_r)
-    {
-        aes_block_shift_rows(&shifted, src);
-        aes_block_mix_columns(dst, &shifted);
-    }
+        aes_block_mix_columns(dst, &shifted, MIX_COL_MATRIX);
     else
-    {
-        aes_block_shift_rows(dst, src);
-    }
+        memcpy(dst, &shifted, sizeof(struct aes_block_t));
+}
+
+static void
+aes_block_diffusion_inv(aes_block_p dst, aes_block_p src, int last_r)
+{
+    struct aes_block_t shifted;
+
+    if (!last_r)
+        aes_block_mix_columns(&shifted, src, INV_MIX_COL_MATRIX);
+    else
+        memcpy(&shifted, src, sizeof(struct aes_block_t));
+
+    aes_block_shift_rows_inv(dst, &shifted);
 }
 
 static void
@@ -391,10 +510,25 @@ static void aes_block_round_n(
     if (round_no < 1 || round_no > keys->N - 1)
         EXIT(FATAL_LOGIC, "aes_block_round_n", "round_no out of bound");
 
-    aes_block_byte_substitution(&tmp_sub, src);
+    aes_block_byte_substitution(&tmp_sub, src, S_BOX);
     aes_block_diffusion(&tmp_diff, &tmp_sub, round_no == keys->N - 1);
 
     aes_block_key_addition(dst, &tmp_diff, &keys->subkeys[round_no]);
+}
+
+static void aes_block_round_n_inv(
+    aes_block_p dst, aes_block_p src, aes_keys_p keys, int round_no
+)
+{
+    struct aes_block_t tmp_diff;
+
+    if (round_no < 1 || round_no > keys->N - 1)
+        EXIT(FATAL_LOGIC, "aes_block_round_n", "round_no out of bound");
+
+    aes_block_key_addition(dst, src, &keys->subkeys[round_no]);
+
+    aes_block_diffusion_inv(&tmp_diff, dst, round_no == keys->N - 1);
+    aes_block_byte_substitution(dst, &tmp_diff, S_BOX_INV);
 }
 
 static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM)
@@ -557,6 +691,28 @@ static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
     memcpy(dst, &block[(i - 1) & 1], sizeof(struct aes_block_t));
 }
 
+static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
+{
+    struct aes_block_t block[2];
+    int                i;
+
+    int iDst = 0;
+
+    memcpy(block + iDst, src, sizeof(struct aes_block_t));
+    memset(block + (1 - iDst), 0, sizeof(struct aes_block_t));
+
+    for (i = KEY->N - 1; i > 0; --i)
+    {
+        iDst = 1 - iDst;
+        aes_block_round_n_inv(block + iDst, block + (1 - iDst), KEY, i);
+    }
+
+    iDst = 1 - iDst;
+    aes_block_key_addition(block + iDst, block + (1 - iDst), &KEY->subkeys[0]);
+
+    memcpy(dst, block + iDst, sizeof(struct aes_block_t));
+}
+
 void aes_encrypt(
     char*          plain,
     char*          enc,
@@ -653,4 +809,84 @@ void aes_encrypt(
 
         break;
     }
+}
+
+int aes_decrypt(
+    char*          plain,
+    char*          enc,
+    unsigned char* key,
+    int            plainN,
+    int            encN,
+    int            keyN,
+    int            pad_mode,
+    int            block_mode
+)
+{
+    struct aes_block_t src;
+    struct aes_block_t dst;
+    struct aes_keys_t  KEY;
+
+    char error_message[1024];
+    int  iEnc;
+    byte pad_byte = 0x00;
+
+    if (block_mode != AES_MODE_ECB)
+        EXIT(
+            FATAL_LOGIC,
+            "aes_decrypt",
+            "mode different from ECB are not supported, yet"
+        );
+
+    if (plainN < encN || plainN < 0 || encN < 0)
+    {
+        sprintf(
+            error_message,
+            "enc has size %d and plaintext has size %d: incompatible or wrong",
+            encN,
+            plainN
+        );
+        EXIT(FATAL_LOGIC, "aes_decrypt", error_message);
+    }
+
+    if (encN % 16 != 0 || encN == 0)
+    {
+        sprintf(
+            error_message, "enc has size %d, that is not multiple of 16", encN
+        );
+        EXIT(FATAL_LOGIC, "aes_decrypt", error_message);
+    }
+
+    aes_keys_init(&KEY, key, keyN);
+
+    for (iEnc = 0; iEnc < encN; iEnc += AES_BLOCK_SIZE)
+    {
+        memcpy(src.data, &enc[iEnc], AES_BLOCK_SIZE);
+
+        aes_block_decrypt(&dst, &src, &KEY);
+
+        memcpy(&plain[iEnc], dst.data, sizeof(src.data));
+    }
+
+    switch (pad_mode)
+    {
+    case AES_PAD_PKCS7:
+        pad_byte = (byte)plain[encN - 1];
+        if (pad_byte < 0x01 || pad_byte > 0x10)
+            return AES_ERR_PKCS_OUT_CHAR_OOB;
+
+        memset(plain + (encN - pad_byte), 0, pad_byte);
+        break;
+    }
+
+    return 0;
+}
+
+const char* aes_err(int code)
+{
+    if (code <= 0 || code >= __aes_err_sentinel)
+    {
+        return NULL;
+    }
+
+    return AES_ERR_COLLECTION[code];
 }
