@@ -5,6 +5,7 @@ enum
 {
     AES_ERR_NONE = 0,
     AES_ERR_PKCS_OUT_CHAR_OOB,
+    AES_ERR_PKCS_INVALID_PADDING,
     AES_ERR_MODE_NOT_SUPPORTED,
 
     __aes_err_sentinel,
@@ -23,6 +24,9 @@ enum
     AES_MODE_CBC
 };
 
+/*
+ * IV: NULL or 16 bytes long
+ */
 extern int aes_encrypt(
     char*          plain,
     char*          enc,
@@ -30,10 +34,14 @@ extern int aes_encrypt(
     int            plainN,
     int            encN,
     int            keyN,
+    char*          IV,
     int            pad_mode,
     int            block_mode
 );
 
+/*
+ * IV: NULL or 16 bytes long
+ */
 extern int aes_decrypt(
     char*          plain,
     char*          enc,
@@ -41,6 +49,7 @@ extern int aes_decrypt(
     int            plainN,
     int            encN,
     int            keyN,
+    char*          IV,
     int            pad_mode,
     int            block_mode
 );

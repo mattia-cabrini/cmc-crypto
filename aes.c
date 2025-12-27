@@ -39,7 +39,10 @@ static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
 static char aes_err_custom[1024];
 const char* AES_ERR_COLLECTION[] = {
-    "", "padding character is out of bound for PKCS#7", "mode not supported"
+    "",
+    "padding character is out of bound for PKCS#7",
+    "padding is not compliant to PKCS#7",
+    "mode not supported"
 };
 
 /*
@@ -233,7 +236,6 @@ static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r);
 static void
 aes_block_diffusion_inv(aes_block_p dst, aes_block_p src, int last_r);
 
-/* `dst` and `src` must be different */
 static void
 aes_block_key_addition(aes_block_p dst, aes_block_p src, aes_block_p key);
 
@@ -252,6 +254,8 @@ static void aes_block_round_n_inv(
 
 static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY);
 static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY);
+
+static void aes_block_copy(aes_block_p dst, aes_block_p src);
 
 /* --- AES Keys */
 
@@ -279,13 +283,14 @@ static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM);
  *   plainN < 0;
  */
 static int aes_encrypt_ecb_cbc(
-    char*      plain,
-    char*      enc,
-    int        plainN,
-    int        encN,
-    aes_keys_p KEY,
-    int        pad_mode,
-    int        block_mode
+    char*       plain,
+    char*       enc,
+    int         plainN,
+    int         encN,
+    aes_keys_p  KEY,
+    aes_block_p IV,
+    int         pad_mode,
+    int         block_mode
 );
 
 /*
@@ -295,12 +300,13 @@ static int aes_encrypt_ecb_cbc(
  *   encN < 0;
  */
 static int aes_decrypt_ecb_cbc(
-    char*      plain,
-    char*      enc,
-    int        encN,
-    aes_keys_p KEY,
-    int        pad_mode,
-    int        block_mode
+    char*       plain,
+    char*       enc,
+    int         encN,
+    aes_keys_p  KEY,
+    aes_block_p IV,
+    int         pad_mode,
+    int         block_mode
 );
 
 /* --- IMPL */
@@ -510,7 +516,7 @@ static void aes_block_diffusion(aes_block_p dst, aes_block_p src, int last_r)
     if (!last_r)
         aes_block_mix_columns(dst, &shifted, MIX_COL_MATRIX);
     else
-        memcpy(dst, &shifted, sizeof(struct aes_block_t));
+        aes_block_copy(dst, &shifted);
 }
 
 static void
@@ -521,7 +527,7 @@ aes_block_diffusion_inv(aes_block_p dst, aes_block_p src, int last_r)
     if (!last_r)
         aes_block_mix_columns(&shifted, src, INV_MIX_COL_MATRIX);
     else
-        memcpy(&shifted, src, sizeof(struct aes_block_t));
+        aes_block_copy(&shifted, src);
 
     aes_block_shift_rows_inv(dst, &shifted);
 }
@@ -722,7 +728,7 @@ static void aes_block_encrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
         /* Ping-Pong 1-0, 0-1, 1-0, 0-1, ... */
         aes_block_round_n(&block[i & 1], &block[1 - (i & 1)], KEY, i + 1);
 
-    memcpy(dst, &block[(i - 1) & 1], sizeof(struct aes_block_t));
+    aes_block_copy(dst, &block[(i - 1) & 1]);
 }
 
 static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
@@ -732,7 +738,7 @@ static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
 
     int iDst = 0;
 
-    memcpy(block + iDst, src, sizeof(struct aes_block_t));
+    aes_block_copy(block + iDst, src);
     memset(block + (1 - iDst), 0, sizeof(struct aes_block_t));
 
     for (i = KEY->N - 1; i > 0; --i)
@@ -744,21 +750,28 @@ static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
     iDst = 1 - iDst;
     aes_block_key_addition(block + iDst, block + (1 - iDst), &KEY->subkeys[0]);
 
-    memcpy(dst, block + iDst, sizeof(struct aes_block_t));
+    aes_block_copy(dst, block + iDst);
+}
+
+static void aes_block_copy(aes_block_p dst, aes_block_p src)
+{
+    memcpy(dst, src, sizeof(*dst));
 }
 
 static int aes_encrypt_ecb_cbc(
-    char*      plain,
-    char*      enc,
-    int        plainN,
-    int        encN,
-    aes_keys_p KEY,
-    int        pad_mode,
-    int        block_mode
+    char*       plain,
+    char*       enc,
+    int         plainN,
+    int         encN,
+    aes_keys_p  KEY,
+    aes_block_p IV,
+    int         pad_mode,
+    int         block_mode
 )
 {
     struct aes_block_t src;
     struct aes_block_t dst;
+    struct aes_block_t iv;
 
     int  iPlain;
     byte pad_byte = 0x00;
@@ -771,6 +784,9 @@ static int aes_encrypt_ecb_cbc(
             "aes_encrypt_ecb_cbc",
             "mode different from ECB or CBC are not supported"
         );
+
+    if (block_mode == AES_MODE_CBC)
+        aes_block_copy(&iv, IV);
 
     switch (pad_mode)
     {
@@ -813,9 +829,15 @@ static int aes_encrypt_ecb_cbc(
         if (pad_byte > 0)
             memset(src.data + (AES_BLOCK_SIZE - pad_byte), pad_byte, pad_byte);
 
+        if (block_mode == AES_MODE_CBC)
+            aes_block_key_addition(&src, &src, &iv);
+
         aes_block_encrypt(&dst, &src, KEY);
 
         memcpy(&enc[iPlain], dst.data, sizeof(src.data));
+
+        if (block_mode == AES_MODE_CBC)
+            aes_block_copy(&iv, &dst);
     }
 
     switch (pad_mode)
@@ -825,6 +847,10 @@ static int aes_encrypt_ecb_cbc(
             break;
 
         memset(src.data, 0x10, AES_BLOCK_SIZE);
+
+        if (block_mode == AES_MODE_CBC)
+            aes_block_key_addition(&src, &src, &iv);
+
         aes_block_encrypt(&dst, &src, KEY);
         memcpy(&enc[iPlain], dst.data, sizeof(src.data));
 
@@ -841,11 +867,13 @@ int aes_encrypt(
     int            plainN,
     int            encN,
     int            keyN,
+    char*          IV,
     int            pad_mode,
     int            block_mode
 )
 {
-    struct aes_keys_t KEY;
+    struct aes_keys_t  KEY;
+    struct aes_block_t oIV;
 
     if (encN < plainN || plainN < 0 || encN < 0)
     {
@@ -860,14 +888,18 @@ int aes_encrypt(
 
     aes_keys_init(&KEY, key, keyN);
 
+    if (IV != NULL)
+        memcpy(oIV.data, IV, 16);
+    else
+        memset(oIV.data, 0, 16);
+
     switch (block_mode)
     {
     case AES_MODE_ECB:
-        return aes_encrypt_ecb_cbc(
-            plain, enc, plainN, encN, &KEY, pad_mode, block_mode
-        );
-        break;
     case AES_MODE_CBC:
+        return aes_encrypt_ecb_cbc(
+            plain, enc, plainN, encN, &KEY, &oIV, pad_mode, block_mode
+        );
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
@@ -877,16 +909,18 @@ int aes_encrypt(
 }
 
 static int aes_decrypt_ecb_cbc(
-    char*      plain,
-    char*      enc,
-    int        encN,
-    aes_keys_p KEY,
-    int        pad_mode,
-    int        block_mode
+    char*       plain,
+    char*       enc,
+    int         encN,
+    aes_keys_p  KEY,
+    aes_block_p IV,
+    int         pad_mode,
+    int         block_mode
 )
 {
     struct aes_block_t src;
     struct aes_block_t dst;
+    struct aes_block_t iv;
 
     int  iEnc;
     byte pad_byte = 0x00;
@@ -908,11 +942,20 @@ static int aes_decrypt_ecb_cbc(
         return AES_ERR_CUSTOM;
     }
 
+    if (block_mode == AES_MODE_CBC)
+        aes_block_copy(&iv, IV);
+
     for (iEnc = 0; iEnc < encN; iEnc += AES_BLOCK_SIZE)
     {
         memcpy(src.data, &enc[iEnc], AES_BLOCK_SIZE);
 
         aes_block_decrypt(&dst, &src, KEY);
+
+        if (block_mode == AES_MODE_CBC)
+        {
+            aes_block_key_addition(&dst, &dst, &iv);
+            aes_block_copy(&iv, &src);
+        }
 
         memcpy(&plain[iEnc], dst.data, sizeof(src.data));
     }
@@ -924,6 +967,10 @@ static int aes_decrypt_ecb_cbc(
 
         if (pad_byte < 0x01 || pad_byte > 0x10)
             return AES_ERR_PKCS_OUT_CHAR_OOB;
+
+        for (iEnc = encN - 1; iEnc >= 0 && encN - iEnc <= pad_byte; --iEnc)
+            if (plain[iEnc] != pad_byte)
+                return AES_ERR_PKCS_INVALID_PADDING;
 
         memset(plain + (encN - pad_byte), 0, pad_byte);
         break;
@@ -939,11 +986,13 @@ int aes_decrypt(
     int            plainN,
     int            encN,
     int            keyN,
+    char*          IV,
     int            pad_mode,
     int            block_mode
 )
 {
-    struct aes_keys_t KEY;
+    struct aes_keys_t  KEY;
+    struct aes_block_t iv;
 
     if (plainN < encN || plainN < 0 || encN < 0)
     {
@@ -956,16 +1005,20 @@ int aes_decrypt(
         EXIT(FATAL_LOGIC, "aes_decrypt", aes_err_custom);
     }
 
+    if (IV != NULL)
+        memcpy(iv.data, IV, 16);
+    else
+        memset(iv.data, 0, 16);
+
     aes_keys_init(&KEY, key, keyN);
 
     switch (block_mode)
     {
     case AES_MODE_ECB:
-        return aes_decrypt_ecb_cbc(
-            plain, enc, encN, &KEY, pad_mode, block_mode
-        );
-        break;
     case AES_MODE_CBC:
+        return aes_decrypt_ecb_cbc(
+            plain, enc, encN, &KEY, &iv, pad_mode, block_mode
+        );
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
