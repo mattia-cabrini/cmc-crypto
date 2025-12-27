@@ -1,6 +1,7 @@
 #ifndef CMC_CRYPTO_ERROR_H_INCLUDED
 #define CMC_CRYPTO_ERROR_H_INCLUDED
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -13,6 +14,15 @@
     {                                                                          \
         fprintf(stderr, "%s: %s\n", (context), (str));                         \
         exit((code));                                                          \
+    }
+
+#define EXIT_EALLOC(ptr)                                                       \
+    {                                                                          \
+        if ((ptr) == NULL)                                                     \
+        {                                                                      \
+            printf("%s\n", strerror(errno));                                   \
+            exit(1);                                                           \
+        }                                                                      \
     }
 
 #define NN(n) __attribute__((nonnull(n)))

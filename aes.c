@@ -1108,7 +1108,10 @@ static int aes_decrypt_ecb_cbc(
             if (plain[iEnc] != pad_byte)
                 return AES_ERR_PKCS_INVALID_PADDING;
 
-        memset(plain + (encN - pad_byte), 0, pad_byte);
+        /* No memset, as the decrypt function has got no mean to tell the caller
+         * the correct size of the decrypted data; The user will figure it out
+         */
+        /* memset(plain + (encN - pad_byte), 0, pad_byte); */
         break;
     }
 

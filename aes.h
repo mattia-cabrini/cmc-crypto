@@ -23,7 +23,16 @@ enum
     AES_MODE_ECB,
     AES_MODE_CBC,
     AES_MODE_OFB,
-    AES_MODE_CFB
+    AES_MODE_CFB,
+    /* CTR and GCM are not implemented, as it would be a style excercise.
+       Furthermore, a real world use case of CTR would require a system to be
+       designed in order to produce a sequence of keys in a desirable manner. An
+       elegant - but sub-optimal - library implementation would maybe take as
+       input a function that returns a new key at each call. Shuch a design
+       would be functional, but would also teach me nothing new about
+       cryptography. */
+
+    __aes_mode_invalid
 };
 
 /*
@@ -45,6 +54,9 @@ extern int aes_encrypt(
 /*
  * IV: NULL or 16 bytes long
  * Pad Mode is only used in ECB and CBC modes.
+ *
+ * WARNING:
+ * Padding is not removed.
  */
 extern int aes_decrypt(
     char*          plain,
