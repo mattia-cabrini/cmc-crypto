@@ -5,8 +5,10 @@ enum
 {
     AES_ERR_NONE = 0,
     AES_ERR_PKCS_OUT_CHAR_OOB,
+    AES_ERR_MODE_NOT_SUPPORTED,
 
-    __aes_err_sentinel
+    __aes_err_sentinel,
+    AES_ERR_CUSTOM
 };
 
 enum
@@ -21,7 +23,7 @@ enum
     AES_MODE_CBC
 };
 
-extern void aes_encrypt(
+extern int aes_encrypt(
     char*          plain,
     char*          enc,
     unsigned char* key,
@@ -43,6 +45,7 @@ extern int aes_decrypt(
     int            block_mode
 );
 
+/* DO NOT FREE */
 extern const char* aes_err(int code);
 
 #endif /* CMC_CRYPTO_AES */

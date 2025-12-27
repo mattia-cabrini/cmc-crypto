@@ -37,8 +37,9 @@ typedef struct aes_keys_t
 
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
-const char* AES_ERR_COLLECTION[]                                   = {
-    "", "padding character is out of bound for PKCS#7"
+static char aes_err_custom[1024];
+const char* AES_ERR_COLLECTION[] = {
+    "", "padding character is out of bound for PKCS#7", "mode not supported"
 };
 
 /*
@@ -268,6 +269,39 @@ static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key);
 /* Initialize `KEY` with `extern_key`: `extern_key` is the AES encryption key
  * and `DIM` is its value expressed in bytes. */
 static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM);
+
+/* --- AES MODES */
+
+/*
+ * U.B. if:
+ * - encN < plainN;
+ * - encN < 0;
+ *   plainN < 0;
+ */
+static int aes_encrypt_ecb_cbc(
+    char*      plain,
+    char*      enc,
+    int        plainN,
+    int        encN,
+    aes_keys_p KEY,
+    int        pad_mode,
+    int        block_mode
+);
+
+/*
+ * U.B. if:
+ * - plainB < encN;
+ *   plainN < 0;
+ *   encN < 0;
+ */
+static int aes_decrypt_ecb_cbc(
+    char*      plain,
+    char*      enc,
+    int        encN,
+    aes_keys_p KEY,
+    int        pad_mode,
+    int        block_mode
+);
 
 /* --- IMPL */
 
@@ -713,42 +747,30 @@ static void aes_block_decrypt(aes_block_p dst, aes_block_p src, aes_keys_p KEY)
     memcpy(dst, block + iDst, sizeof(struct aes_block_t));
 }
 
-void aes_encrypt(
-    char*          plain,
-    char*          enc,
-    unsigned char* key,
-    int            plainN,
-    int            encN,
-    int            keyN,
-    int            pad_mode,
-    int            block_mode
+static int aes_encrypt_ecb_cbc(
+    char*      plain,
+    char*      enc,
+    int        plainN,
+    int        encN,
+    aes_keys_p KEY,
+    int        pad_mode,
+    int        block_mode
 )
 {
     struct aes_block_t src;
     struct aes_block_t dst;
-    struct aes_keys_t  KEY;
 
-    char error_message[1024];
     int  iPlain;
     byte pad_byte = 0x00;
 
-    if (block_mode != AES_MODE_ECB)
+    if (block_mode != AES_MODE_ECB && block_mode != AES_MODE_CBC)
+        /* Exit, for function is internal to the TU, and hence should receive
+         * this parameter correctly */
         EXIT(
             FATAL_LOGIC,
-            "aes_encrypt",
-            "mode different from ECB are not supported, yet"
+            "aes_encrypt_ecb_cbc",
+            "mode different from ECB or CBC are not supported"
         );
-
-    if (encN < plainN || plainN < 0 || encN < 0)
-    {
-        sprintf(
-            error_message,
-            "enc has size %d and plaintext has size %d: incompatible or wrong",
-            encN,
-            plainN
-        );
-        EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
-    }
 
     switch (pad_mode)
     {
@@ -756,30 +778,29 @@ void aes_encrypt(
         if (plainN % 16 != 0)
         {
             sprintf(
-                error_message,
+                aes_err_custom,
                 "padding mode is NONE but plaintext size is (%d)",
                 plainN
             );
-            EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
+            return AES_ERR_CUSTOM;
         }
         break;
     case AES_PAD_PKCS7:
         if (encN < plainN + (plainN % 16 == 0 ? 16 : 16 - (plainN % 16)))
         {
             sprintf(
-                error_message,
+                aes_err_custom,
                 "enc has size %d and plaintext has size %d: wrong for PKCS#7",
                 encN,
                 plainN
             );
-            EXIT(FATAL_LOGIC, "aes_encrypt", error_message);
+            return AES_ERR_CUSTOM;
         }
         break;
     default:
-        EXIT(FATAL_LOGIC, "aes_encrypt", "padding mode not supported");
+        sprintf(aes_err_custom, "padding mode not supported");
+        return AES_ERR_CUSTOM;
     }
-
-    aes_keys_init(&KEY, key, keyN);
 
     for (iPlain = 0; iPlain < plainN; iPlain += AES_BLOCK_SIZE)
     {
@@ -792,7 +813,7 @@ void aes_encrypt(
         if (pad_byte > 0)
             memset(src.data + (AES_BLOCK_SIZE - pad_byte), pad_byte, pad_byte);
 
-        aes_block_encrypt(&dst, &src, &KEY);
+        aes_block_encrypt(&dst, &src, KEY);
 
         memcpy(&enc[iPlain], dst.data, sizeof(src.data));
     }
@@ -804,11 +825,111 @@ void aes_encrypt(
             break;
 
         memset(src.data, 0x10, AES_BLOCK_SIZE);
-        aes_block_encrypt(&dst, &src, &KEY);
+        aes_block_encrypt(&dst, &src, KEY);
         memcpy(&enc[iPlain], dst.data, sizeof(src.data));
 
         break;
     }
+
+    return AES_ERR_NONE;
+}
+
+int aes_encrypt(
+    char*          plain,
+    char*          enc,
+    unsigned char* key,
+    int            plainN,
+    int            encN,
+    int            keyN,
+    int            pad_mode,
+    int            block_mode
+)
+{
+    struct aes_keys_t KEY;
+
+    if (encN < plainN || plainN < 0 || encN < 0)
+    {
+        sprintf(
+            aes_err_custom,
+            "enc has size %d and plaintext has size %d: incompatible or wrong",
+            encN,
+            plainN
+        );
+        return AES_ERR_CUSTOM;
+    }
+
+    aes_keys_init(&KEY, key, keyN);
+
+    switch (block_mode)
+    {
+    case AES_MODE_ECB:
+        return aes_encrypt_ecb_cbc(
+            plain, enc, plainN, encN, &KEY, pad_mode, block_mode
+        );
+        break;
+    case AES_MODE_CBC:
+    default:
+        return AES_ERR_MODE_NOT_SUPPORTED;
+    }
+
+    /* Exit, for it should be unreachable */
+    EXIT(FATAL_LOGIC, "aes_encrypt", "### no statement ###");
+}
+
+static int aes_decrypt_ecb_cbc(
+    char*      plain,
+    char*      enc,
+    int        encN,
+    aes_keys_p KEY,
+    int        pad_mode,
+    int        block_mode
+)
+{
+    struct aes_block_t src;
+    struct aes_block_t dst;
+
+    int  iEnc;
+    byte pad_byte = 0x00;
+
+    if (block_mode != AES_MODE_ECB && block_mode != AES_MODE_CBC)
+        /* Exit, for function is internal to the TU, and hence should receive
+         * this parameter correctly */
+        EXIT(
+            FATAL_LOGIC,
+            "aes_decrypt_ecb_cbc",
+            "mode different from ECB and CBC are not supported"
+        );
+
+    if (encN % 16 != 0 || encN == 0)
+    {
+        sprintf(
+            aes_err_custom, "enc has size %d, that is not multiple of 16", encN
+        );
+        return AES_ERR_CUSTOM;
+    }
+
+    for (iEnc = 0; iEnc < encN; iEnc += AES_BLOCK_SIZE)
+    {
+        memcpy(src.data, &enc[iEnc], AES_BLOCK_SIZE);
+
+        aes_block_decrypt(&dst, &src, KEY);
+
+        memcpy(&plain[iEnc], dst.data, sizeof(src.data));
+    }
+
+    switch (pad_mode)
+    {
+    case AES_PAD_PKCS7:
+        pad_byte = (byte)plain[encN - 1];
+
+        if (pad_byte < 0x01 || pad_byte > 0x10)
+            return AES_ERR_PKCS_OUT_CHAR_OOB;
+
+        memset(plain + (encN - pad_byte), 0, pad_byte);
+        break;
+    }
+
+    return 0;
 }
 
 int aes_decrypt(
@@ -822,60 +943,31 @@ int aes_decrypt(
     int            block_mode
 )
 {
-    struct aes_block_t src;
-    struct aes_block_t dst;
-    struct aes_keys_t  KEY;
-
-    char error_message[1024];
-    int  iEnc;
-    byte pad_byte = 0x00;
-
-    if (block_mode != AES_MODE_ECB)
-        EXIT(
-            FATAL_LOGIC,
-            "aes_decrypt",
-            "mode different from ECB are not supported, yet"
-        );
+    struct aes_keys_t KEY;
 
     if (plainN < encN || plainN < 0 || encN < 0)
     {
         sprintf(
-            error_message,
+            aes_err_custom,
             "enc has size %d and plaintext has size %d: incompatible or wrong",
             encN,
             plainN
         );
-        EXIT(FATAL_LOGIC, "aes_decrypt", error_message);
-    }
-
-    if (encN % 16 != 0 || encN == 0)
-    {
-        sprintf(
-            error_message, "enc has size %d, that is not multiple of 16", encN
-        );
-        EXIT(FATAL_LOGIC, "aes_decrypt", error_message);
+        EXIT(FATAL_LOGIC, "aes_decrypt", aes_err_custom);
     }
 
     aes_keys_init(&KEY, key, keyN);
 
-    for (iEnc = 0; iEnc < encN; iEnc += AES_BLOCK_SIZE)
+    switch (block_mode)
     {
-        memcpy(src.data, &enc[iEnc], AES_BLOCK_SIZE);
-
-        aes_block_decrypt(&dst, &src, &KEY);
-
-        memcpy(&plain[iEnc], dst.data, sizeof(src.data));
-    }
-
-    switch (pad_mode)
-    {
-    case AES_PAD_PKCS7:
-        pad_byte = (byte)plain[encN - 1];
-        if (pad_byte < 0x01 || pad_byte > 0x10)
-            return AES_ERR_PKCS_OUT_CHAR_OOB;
-
-        memset(plain + (encN - pad_byte), 0, pad_byte);
+    case AES_MODE_ECB:
+        return aes_decrypt_ecb_cbc(
+            plain, enc, encN, &KEY, pad_mode, block_mode
+        );
         break;
+    case AES_MODE_CBC:
+    default:
+        return AES_ERR_MODE_NOT_SUPPORTED;
     }
 
     return 0;
@@ -883,10 +975,11 @@ int aes_decrypt(
 
 const char* aes_err(int code)
 {
+    if (code == AES_ERR_CUSTOM)
+        return aes_err_custom;
+
     if (code <= 0 || code >= __aes_err_sentinel)
-    {
         return NULL;
-    }
 
     return AES_ERR_COLLECTION[code];
 }
