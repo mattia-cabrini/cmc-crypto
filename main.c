@@ -5,6 +5,7 @@
 
 #include "aes.h"
 #include "error.h"
+#include "io.h"
 
 enum
 {
@@ -20,17 +21,7 @@ void exit_usage(void);
 
 void aes_router(int argc, char** argv);
 
-/* Read all file content and put it in a buffer.
- * The buffer is returned and ownership is transfered to the caller.
- * The buffer size if stored into *r. */
-char* read_all_content(const char* path, int* r);
-
-/* Write a buffer to a file, panic in case of failure.
- */
-void write_all_content(const char* buf, const char* path, int r, int pad_mode);
-
 /*
- * argc = 3:
  * - [0]
  * - [1] operation (encrypt, decrypt)
  * - [2] algo-variant-padding. E.g.:
@@ -105,30 +96,25 @@ void exit_usage(void)
 void aes_router(int argc, char** argv)
 {
     int block_mode = __aes_mode_invalid;
-    int pad_mode   = AES_PAD_NONE;
+    int pad_mode   = PAD_NONE;
     int aes_ret_code;
 
-    char* in_text = NULL;
-    int   in_text_N;
+    struct io_buffer_t input_text;
+    struct io_buffer_t output_text;
+    struct io_buffer_t key;
+    struct io_buffer_t iv; /* Before reading IV, tell if IV should be read;
+                              After reading IV, tell its length*/
 
-    char* out_text = NULL;
-    int   out_text_N;
-
-    unsigned char* key = NULL;
-    int            key_N;
-
-    char* iv = NULL;
-    int iv_N = 0; /* Before reading IV, tell if IV should be read; After reading
-                     IV, tell its length*/
+    io_buffer_alloc(&iv, 0);
 
     if (strcmp(argv[CLI_CIPHER], "AES-ECB") == 0)
     {
-        block_mode = AES_MODE_ECB;
+        block_mode = MODE_ECB;
     }
     else if (strcmp(argv[CLI_CIPHER], "AES-ECB-PKCS#7") == 0)
     {
-        block_mode = AES_MODE_ECB;
-        pad_mode   = AES_PAD_PKCS7;
+        block_mode = MODE_ECB;
+        pad_mode   = PAD_PKCS7;
     }
     else if (strcmp(argv[CLI_CIPHER], "AES-CBC") == 0)
     {
@@ -138,8 +124,8 @@ void aes_router(int argc, char** argv)
             exit_usage();
         }
 
-        iv_N       = 1;
-        block_mode = AES_MODE_CBC;
+        iv.N       = 1;
+        block_mode = MODE_CBC;
     }
     else if (strcmp(argv[CLI_CIPHER], "AES-CBC-PKCS#7") == 0)
     {
@@ -149,9 +135,9 @@ void aes_router(int argc, char** argv)
             exit_usage();
         }
 
-        iv_N       = 1;
-        block_mode = AES_MODE_CBC;
-        pad_mode   = AES_PAD_PKCS7;
+        iv.N       = 1;
+        block_mode = MODE_CBC;
+        pad_mode   = PAD_PKCS7;
     }
     else if (strcmp(argv[CLI_CIPHER], "AES-OFB") == 0)
     {
@@ -161,8 +147,8 @@ void aes_router(int argc, char** argv)
             exit_usage();
         }
 
-        iv_N       = 1;
-        block_mode = AES_MODE_OFB;
+        iv.N       = 1;
+        block_mode = MODE_OFB;
     }
 
     if (block_mode == __aes_mode_invalid)
@@ -171,59 +157,60 @@ void aes_router(int argc, char** argv)
         exit_usage();
     }
 
-    if (iv_N)
+    if (iv.N)
     {
-        iv = read_all_content(argv[CLI_PATH_IV], &iv_N);
-        if (iv_N != 16)
+        io_read_all_content(&iv, argv[CLI_PATH_IV]);
+        if (iv.N != 16)
         {
-            free(iv);
-            printf("IV size must be 16 (found %d)\n", iv_N);
+            io_buffer_free(&iv);
+            printf("IV size must be 16 (found %d)\n", iv.N);
             exit(FATAL_GENERIC);
         }
     }
 
-    in_text = read_all_content(argv[CLI_PATH_IN], &in_text_N);
+    io_read_all_content(&input_text, argv[CLI_PATH_IN]);
 
-    if (pad_mode == AES_PAD_NONE || argv[CLI_OP][0] == 'd')
+    if (pad_mode == PAD_NONE || argv[CLI_OP][0] == 'd')
     {
-        out_text_N = in_text_N;
+        output_text.N = input_text.N;
     }
     else
     {
-        out_text_N = in_text_N + 16;
-        out_text_N -= in_text_N % 16;
+        output_text.N = input_text.N + 16;
+        output_text.N -= input_text.N % 16;
     }
 
-    out_text = malloc((size_t)out_text_N);
-    EXIT_EALLOC(out_text);
+    io_buffer_alloc(&output_text, output_text.N);
 
 #ifdef DEBUG
-    printf("in_text_N = %d, out_text_N = %d\n", in_text_N, out_text_N);
+    printf(
+        "input_text.N = %d, output_text.N = %d\n", input_text.N, output_text.N
+    );
 #endif
 
-    key = (unsigned char*)read_all_content(argv[CLI_PATH_KEY], &key_N);
+    io_read_all_content(&key, argv[CLI_PATH_KEY]);
 
     if (argv[CLI_OP][0] == 'e')
         aes_ret_code = aes_encrypt(
-            in_text,
-            out_text,
-            key,
-            in_text_N,
-            out_text_N,
-            key_N,
-            iv,
+            input_text.buf,
+            output_text.buf,
+            (unsigned char*)key.buf,
+            input_text.N,
+            output_text.N,
+            key.N,
+            iv.buf,
             pad_mode,
             block_mode
         );
     else if (argv[CLI_OP][0] == 'd')
         aes_ret_code = aes_decrypt(
-            out_text,
-            in_text,
-            key,
-            out_text_N,
-            in_text_N,
-            key_N,
-            iv,
+            output_text.buf,
+            input_text.buf,
+            (unsigned char*)key.buf,
+            output_text.N,
+            input_text.N,
+            key.N,
+            iv.buf,
             pad_mode,
             block_mode
         );
@@ -231,100 +218,16 @@ void aes_router(int argc, char** argv)
         aes_ret_code = 0;
 
     if (aes_ret_code == 0)
-        write_all_content(
-            out_text,
+        io_write_all_content(
+            &output_text,
             argv[CLI_PATH_OUT],
-            out_text_N,
-            argv[CLI_OP][0] == 'e' ? AES_PAD_NONE : pad_mode
+            argv[CLI_OP][0] == 'e' ? PAD_NONE : pad_mode
         );
     else
         printf("AES failed: %s\n", aes_err(aes_ret_code));
 
-    if (iv != NULL)
-        free(iv);
-
-    if (in_text != NULL)
-        free(in_text);
-
-    if (out_text != NULL)
-        free(out_text);
-
-    if (key != NULL)
-        free(key);
-}
-
-char* read_all_content(const char* path, int* r)
-{
-    const size_t N   = 1024;
-    size_t       sz  = N;
-    char*        buf = NULL;
-    FILE*        fp  = fopen(path, "rb");
-
-    if (fp == NULL)
-    {
-        printf("%s", strerror(errno));
-        exit(errno);
-    }
-
-    for (*r = 0; !feof(fp);)
-    {
-        if (buf == NULL)
-        {
-            buf = malloc(sz);
-        }
-        else
-        {
-            sz  = sz * 2;
-            buf = realloc(buf, sz);
-        }
-
-        if (buf == NULL)
-        {
-            printf("%s", strerror(errno));
-            fclose(fp);
-            exit(errno);
-        }
-
-        *r += (int)fread(buf + *r, 1, sz - (size_t)*r, fp);
-    }
-
-    fclose(fp);
-    return buf;
-}
-
-void write_all_content(const char* buf, const char* path, int r, int pad_mode)
-{
-    int   wb;
-    FILE* fp;
-
-    if (r == 0)
-        return;
-
-    if (pad_mode == AES_PAD_PKCS7)
-    {
-        if ((unsigned char)buf[r - 1] > r)
-            EXIT(FATAL_GENERIC, "write_all_content", "pad is incorrect");
-
-        printf("padding of %d", buf[r - 1]);
-        r -= (unsigned char)buf[r - 1];
-    }
-
-    fp = fopen(path, "wb");
-
-    if (fp == NULL)
-    {
-        printf("%s", strerror(errno));
-        exit(errno);
-    }
-
-    wb = (int)fwrite(buf, 1, (size_t)r, fp);
-
-    if (wb != r)
-    {
-        printf("%s", strerror(errno));
-        fclose(fp);
-        exit(errno);
-    }
-
-    fclose(fp);
+    io_buffer_free(&input_text);
+    io_buffer_free(&output_text);
+    io_buffer_free(&key);
+    io_buffer_free(&iv);
 }

@@ -829,7 +829,7 @@ static int aes_encrypt_ecb_cbc(
     int  iPlain;
     byte pad_byte = 0x00;
 
-    if (block_mode != AES_MODE_ECB && block_mode != AES_MODE_CBC)
+    if (block_mode != MODE_ECB && block_mode != MODE_CBC)
         /* Exit, for function is internal to the TU, and hence should receive
          * this parameter correctly */
         EXIT(
@@ -838,12 +838,12 @@ static int aes_encrypt_ecb_cbc(
             "mode different from ECB or CBC are not supported"
         );
 
-    if (block_mode == AES_MODE_CBC)
+    if (block_mode == MODE_CBC)
         aes_block_copy(&iv, IV);
 
     switch (pad_mode)
     {
-    case AES_PAD_NONE:
+    case PAD_NONE:
         if (plainN % 16 != 0)
         {
             sprintf(
@@ -854,7 +854,7 @@ static int aes_encrypt_ecb_cbc(
             return AES_ERR_CUSTOM;
         }
         break;
-    case AES_PAD_PKCS7:
+    case PAD_PKCS7:
         if (encN < plainN + (plainN % 16 == 0 ? 16 : 16 - (plainN % 16)))
         {
             sprintf(
@@ -882,26 +882,26 @@ static int aes_encrypt_ecb_cbc(
         if (pad_byte > 0)
             memset(src.data + (AES_BLOCK_SIZE - pad_byte), pad_byte, pad_byte);
 
-        if (block_mode == AES_MODE_CBC)
+        if (block_mode == MODE_CBC)
             aes_block_key_addition(&src, &src, &iv);
 
         aes_block_encrypt(&dst, &src, KEY);
 
         memcpy(&enc[iPlain], dst.data, sizeof(src.data));
 
-        if (block_mode == AES_MODE_CBC)
+        if (block_mode == MODE_CBC)
             aes_block_copy(&iv, &dst);
     }
 
     switch (pad_mode)
     {
-    case AES_PAD_PKCS7:
+    case PAD_PKCS7:
         if (pad_byte != 0)
             break;
 
         memset(src.data, 0x10, AES_BLOCK_SIZE);
 
-        if (block_mode == AES_MODE_CBC)
+        if (block_mode == MODE_CBC)
             aes_block_key_addition(&src, &src, &iv);
 
         aes_block_encrypt(&dst, &src, KEY);
@@ -1027,14 +1027,14 @@ int aes_encrypt(
 
     switch (block_mode)
     {
-    case AES_MODE_ECB:
-    case AES_MODE_CBC:
+    case MODE_ECB:
+    case MODE_CBC:
         return aes_encrypt_ecb_cbc(
             plain, enc, plainN, encN, &KEY, &oIV, pad_mode, block_mode
         );
-    case AES_MODE_OFB:
+    case MODE_OFB:
         return aes_XXcrypt_ofb(enc, plain, plainN, &KEY, &oIV);
-    case AES_MODE_CFB:
+    case MODE_CFB:
         return aes_encrypt_cfb(enc, plain, plainN, &KEY, &oIV);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
@@ -1061,7 +1061,7 @@ static int aes_decrypt_ecb_cbc(
     int  iEnc;
     byte pad_byte = 0x00;
 
-    if (block_mode != AES_MODE_ECB && block_mode != AES_MODE_CBC)
+    if (block_mode != MODE_ECB && block_mode != MODE_CBC)
         /* Exit, for function is internal to the TU, and hence should receive
          * this parameter correctly */
         EXIT(
@@ -1078,7 +1078,7 @@ static int aes_decrypt_ecb_cbc(
         return AES_ERR_CUSTOM;
     }
 
-    if (block_mode == AES_MODE_CBC)
+    if (block_mode == MODE_CBC)
         aes_block_copy(&iv, IV);
 
     for (iEnc = 0; iEnc < encN; iEnc += AES_BLOCK_SIZE)
@@ -1087,7 +1087,7 @@ static int aes_decrypt_ecb_cbc(
 
         aes_block_decrypt(&dst, &src, KEY);
 
-        if (block_mode == AES_MODE_CBC)
+        if (block_mode == MODE_CBC)
         {
             aes_block_key_addition(&dst, &dst, &iv);
             aes_block_copy(&iv, &src);
@@ -1098,7 +1098,7 @@ static int aes_decrypt_ecb_cbc(
 
     switch (pad_mode)
     {
-    case AES_PAD_PKCS7:
+    case PAD_PKCS7:
         pad_byte = (byte)plain[encN - 1];
 
         if (pad_byte < 0x01 || pad_byte > 0x10)
@@ -1153,14 +1153,14 @@ int aes_decrypt(
 
     switch (block_mode)
     {
-    case AES_MODE_ECB:
-    case AES_MODE_CBC:
+    case MODE_ECB:
+    case MODE_CBC:
         return aes_decrypt_ecb_cbc(
             plain, enc, encN, &KEY, &iv, pad_mode, block_mode
         );
-    case AES_MODE_OFB:
+    case MODE_OFB:
         return aes_XXcrypt_ofb(plain, enc, encN, &KEY, &iv);
-    case AES_MODE_CFB:
+    case MODE_CFB:
         return aes_decrypt_cfb(plain, enc, encN, &KEY, &iv);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
