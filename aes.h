@@ -22,7 +22,8 @@ enum
 {
     AES_MODE_ECB,
     AES_MODE_CBC,
-    AES_MODE_OFB
+    AES_MODE_OFB,
+    AES_MODE_CFB
 };
 
 /*

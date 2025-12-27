@@ -42,6 +42,13 @@ typedef struct ofb_iterator_t
     int                n;
 }* ofb_iterator_p;
 
+typedef struct cfb_iterator_t
+{
+    struct aes_block_t subkey;
+    struct aes_keys_t  KEY;
+    int                n;
+}* cfb_iterator_p;
+
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
 static char aes_err_custom[1024];
@@ -287,6 +294,10 @@ static void aes_keys_copy(aes_keys_p dst, aes_keys_p src);
 static void ofb_it_init(ofb_iterator_p it, aes_keys_p KEY, aes_block_p IV);
 static byte ofb_it_next(ofb_iterator_p it);
 
+/* --- CFB Iterator */
+static void cfb_it_init(cfb_iterator_p it, aes_keys_p KEY);
+static byte cfb_it_next(cfb_iterator_p it, aes_block_p CT);
+
 /* --- AES MODES */
 
 /*
@@ -329,6 +340,22 @@ static int aes_decrypt_ecb_cbc(
  */
 static int
 aes_XXcrypt_ofb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV);
+
+/*
+ * U.B. if:
+ * - sizeof(dst) < sizeof(src);
+ * - N < 0;
+ */
+static int
+aes_encrypt_cfb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV);
+
+/*
+ * U.B. if:
+ * - sizeof(dst) < sizeof(src);
+ * - N < 0;
+ */
+static int
+aes_decrypt_cfb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV);
 
 /* --- IMPL */
 
@@ -901,6 +928,70 @@ aes_XXcrypt_ofb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV)
     return 0;
 }
 
+static int
+aes_encrypt_cfb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV)
+{
+    struct cfb_iterator_t it;
+    struct aes_block_t    ct;
+
+    int i;
+    int iCT;
+
+    cfb_it_init(&it, KEY);
+    aes_block_copy(&ct, IV);
+
+    for (i = iCT = 0; i < N; ++i)
+    {
+        dst[i] = (char)(src[i] ^ cfb_it_next(&it, &ct));
+
+        /* `ct` is overwritten during elaboration, as cfb_it_next would not use
+         * it, unless i mult. of 16, i.e. iCT == 0. */
+        ct.data[iCT] = (byte)dst[i];
+
+        ++iCT;
+        if (iCT == AES_BLOCK_SIZE)
+            iCT = 0;
+    }
+
+    /* `ct` must not be used anymore, as for N not mult. of 16, it would be in
+     * an undefined state */
+
+    return 0;
+}
+
+static int
+aes_decrypt_cfb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV)
+{
+    struct cfb_iterator_t it;
+    struct aes_block_t    ct;
+
+    int  i;
+    int  iCT;
+    byte subject;
+
+    cfb_it_init(&it, KEY);
+    aes_block_copy(&ct, IV);
+
+    for (i = iCT = 0; i < N; ++i)
+    {
+        subject = (byte)src[i];
+        dst[i]  = (char)(subject ^ cfb_it_next(&it, &ct));
+
+        /* `ct` is overwritten during elaboration, as cfb_it_next would not use
+         * it, unless i mult. of 16, i.e. iCT == 0. */
+        ct.data[iCT] = (byte)subject;
+
+        ++iCT;
+        if (iCT == AES_BLOCK_SIZE)
+            iCT = 0;
+    }
+
+    /* `ct` must not be used anymore, as for N not mult. of 16, it would be in
+     * an undefined state */
+
+    return 0;
+}
+
 int aes_encrypt(
     char*          plain,
     char*          enc,
@@ -943,6 +1034,8 @@ int aes_encrypt(
         );
     case AES_MODE_OFB:
         return aes_XXcrypt_ofb(enc, plain, plainN, &KEY, &oIV);
+    case AES_MODE_CFB:
+        return aes_encrypt_cfb(enc, plain, plainN, &KEY, &oIV);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
@@ -1064,6 +1157,8 @@ int aes_decrypt(
         );
     case AES_MODE_OFB:
         return aes_XXcrypt_ofb(plain, enc, encN, &KEY, &iv);
+    case AES_MODE_CFB:
+        return aes_decrypt_cfb(plain, enc, encN, &KEY, &iv);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
@@ -1097,6 +1192,30 @@ static byte ofb_it_next(ofb_iterator_p it)
     {
         it->n = 0;
         aes_block_encrypt(&tmp, &it->subkey, &it->KEY);
+        aes_block_copy(&it->subkey, &tmp);
+    }
+
+    it->n += 1;
+    return it->subkey.data[it->n - 1];
+}
+
+static void cfb_it_init(cfb_iterator_p it, aes_keys_p KEY)
+{
+    aes_keys_copy(&it->KEY, KEY);
+    it->n = AES_BLOCK_SIZE;
+}
+
+static byte cfb_it_next(cfb_iterator_p it, aes_block_p CT)
+{
+    struct aes_block_t tmp;
+
+    if (it->n == AES_BLOCK_SIZE)
+    {
+        if (CT == NULL)
+            EXIT(FATAL_LOGIC, "cfb_it_next", "last ciphertext NULL");
+
+        it->n = 0;
+        aes_block_encrypt(&tmp, CT, &it->KEY);
         aes_block_copy(&it->subkey, &tmp);
     }
 
