@@ -35,6 +35,13 @@ typedef struct aes_keys_t
     int N;
 }* aes_keys_p;
 
+typedef struct ofb_iterator_t
+{
+    struct aes_block_t subkey;
+    struct aes_keys_t  KEY;
+    int                n;
+}* ofb_iterator_p;
+
 static struct polynom_red_cache_item_t polynom_red_cache[256][256] = {0};
 
 static char aes_err_custom[1024];
@@ -274,6 +281,12 @@ static void aes_keys_schedule_256(aes_keys_p KEY, byte* extern_key);
  * and `DIM` is its value expressed in bytes. */
 static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM);
 
+static void aes_keys_copy(aes_keys_p dst, aes_keys_p src);
+
+/* --- OFB Iterator */
+static void ofb_it_init(ofb_iterator_p it, aes_keys_p KEY, aes_block_p IV);
+static byte ofb_it_next(ofb_iterator_p it);
+
 /* --- AES MODES */
 
 /*
@@ -308,6 +321,14 @@ static int aes_decrypt_ecb_cbc(
     int         pad_mode,
     int         block_mode
 );
+
+/*
+ * U.B. if:
+ * - sizeof(dst) < sizeof(src);
+ * - N < 0;
+ */
+static int
+aes_XXcrypt_ofb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV);
 
 /* --- IMPL */
 
@@ -597,6 +618,11 @@ static void aes_keys_init(aes_keys_p KEY, byte* extern_key, int DIM)
     }
 }
 
+static void aes_keys_copy(aes_keys_p dst, aes_keys_p src)
+{
+    memcpy(dst, src, sizeof(*dst));
+}
+
 static word aes_keys_schedule_h(word w)
 {
     byte* vTOw = (byte*)&w;
@@ -860,6 +886,21 @@ static int aes_encrypt_ecb_cbc(
     return AES_ERR_NONE;
 }
 
+static int
+aes_XXcrypt_ofb(char* dst, char* src, int N, aes_keys_p KEY, aes_block_p IV)
+{
+    struct ofb_iterator_t it;
+
+    int i;
+
+    ofb_it_init(&it, KEY, IV);
+
+    for (i = 0; i < N; ++i)
+        dst[i] = (char)(src[i] ^ ofb_it_next(&it));
+
+    return 0;
+}
+
 int aes_encrypt(
     char*          plain,
     char*          enc,
@@ -900,6 +941,8 @@ int aes_encrypt(
         return aes_encrypt_ecb_cbc(
             plain, enc, plainN, encN, &KEY, &oIV, pad_mode, block_mode
         );
+    case AES_MODE_OFB:
+        return aes_XXcrypt_ofb(enc, plain, plainN, &KEY, &oIV);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
@@ -1019,6 +1062,8 @@ int aes_decrypt(
         return aes_decrypt_ecb_cbc(
             plain, enc, encN, &KEY, &iv, pad_mode, block_mode
         );
+    case AES_MODE_OFB:
+        return aes_XXcrypt_ofb(plain, enc, encN, &KEY, &iv);
     default:
         return AES_ERR_MODE_NOT_SUPPORTED;
     }
@@ -1035,4 +1080,26 @@ const char* aes_err(int code)
         return NULL;
 
     return AES_ERR_COLLECTION[code];
+}
+
+static void ofb_it_init(ofb_iterator_p it, aes_keys_p KEY, aes_block_p IV)
+{
+    aes_block_copy(&it->subkey, IV);
+    aes_keys_copy(&it->KEY, KEY);
+    it->n = AES_BLOCK_SIZE;
+}
+
+static byte ofb_it_next(ofb_iterator_p it)
+{
+    struct aes_block_t tmp;
+
+    if (it->n == AES_BLOCK_SIZE)
+    {
+        it->n = 0;
+        aes_block_encrypt(&tmp, &it->subkey, &it->KEY);
+        aes_block_copy(&it->subkey, &tmp);
+    }
+
+    it->n += 1;
+    return it->subkey.data[it->n - 1];
 }

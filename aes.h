@@ -21,11 +21,13 @@ enum
 enum
 {
     AES_MODE_ECB,
-    AES_MODE_CBC
+    AES_MODE_CBC,
+    AES_MODE_OFB
 };
 
 /*
  * IV: NULL or 16 bytes long
+ * Pad Mode is only used in ECB and CBC modes.
  */
 extern int aes_encrypt(
     char*          plain,
@@ -41,6 +43,7 @@ extern int aes_encrypt(
 
 /*
  * IV: NULL or 16 bytes long
+ * Pad Mode is only used in ECB and CBC modes.
  */
 extern int aes_decrypt(
     char*          plain,
