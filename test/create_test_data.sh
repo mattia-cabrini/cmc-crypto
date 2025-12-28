@@ -25,6 +25,8 @@ if [[ "$C" = "00" ]]; then
 	echo "Created '$1/data.bin', with length $(stat -c %s "$1/data.bin"), ZERO"
 else
 	LENGTH=$(cat /dev/urandom | tr -cd '0-9' | head -c 3)
+	LENGTH=$((10#$LENGTH + 1)) # To avoid 0-length
+
 	head /dev/urandom -c $LENGTH > "$1/data.bin"
 	echo "Created '$1/data.bin', with length $(stat -c %s "$1/data.bin")"
 fi
