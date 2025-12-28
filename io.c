@@ -97,7 +97,10 @@ void io_write_all_content(io_buffer_p B, const char* path, int pad_mode)
         if ((unsigned char)B->buf[to_print - 1] > to_print)
             EXIT(FATAL_GENERIC, "io_write_all_content", "pad is incorrect");
 
+#ifdef DEBUG
         printf("padding of %d", B->buf[to_print - 1]);
+#endif
+
         to_print -= (unsigned char)B->buf[to_print - 1];
     }
 
