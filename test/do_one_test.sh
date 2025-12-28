@@ -22,9 +22,11 @@ fi
 KEY=$(xxd -p -c 256 "$4")
 IV=$(xxd -p -c 256 "$DIRECTORY/iv.bin")
 
+KEYLENGTH=$(wc -c "$4" | cut -d " " -f 1)
+
 OUT_OPENSSL="$DIRECTORY/data-$2-openssl.bin"
-OUT_CMCCRYPTO="$DIRECTORY/data-$3-cmc-crypto.bin"
-OUTPLAIN_CMCCRYPTO="$DIRECTORY/data-$3-cmc-crypto.plain.bin"
+OUT_CMCCRYPTO="$DIRECTORY/data-$3-$KEYLENGTH-cmc-crypto.bin"
+OUTPLAIN_CMCCRYPTO="$DIRECTORY/data-$3-$KEYLENGTH-cmc-crypto.plain.bin"
 
 echo -n "Testing $2... "
 
