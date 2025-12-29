@@ -11,6 +11,28 @@ software meant for learning how cryptography works.
 
 CMC-Crypto is not production-grade software.
 
+## Roadmap
+
+### AES
+
+- [OK] AES naked;
+- [OK] AES with ECB;
+- [OK] AES with CBC;
+- [OK] AES with OFB;
+
+### RSA
+
+- [TODO] Key pair generation;
+- [TODO] Encryption;
+- [TODO] Decryption;
+- [TODO] Signature.
+
+### SHA-2
+
+- [TODO] SHA-256
+- [TODO] SHA-384
+- [TODO] SHA-512
+
 ## License
 MIT License
 
