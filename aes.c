@@ -1,12 +1,11 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "aes.h"
 #include "error.h"
-#include <string.h>
+#include "types.h"
 
 #define AES_BLOCK_SIZE 16
-
-typedef unsigned char byte;
 
 typedef struct aes_block_t
 {
