@@ -40,6 +40,24 @@ void bigint_init_by_int(bigint_p N, int n)
     bigint_set_internal(N);
 }
 
+void bigint_copy(bigint_p DST, bigint_p N)
+{
+    memcpy(DST, N, sizeof(struct bigint_t));
+}
+
+int bigint_iszero(bigint_p N)
+{
+    if (N->max_exp)
+        return 0;
+
+    if (N->max_digit2)
+        return 0;
+
+    return !N->num[0];
+}
+
+int bigint_iseven(bigint_p N) { return !(N->num[0] & 1); }
+
 void bigint_sum(bigint_p DST, bigint_p N, bigint_p M)
 {
     int i;
@@ -122,7 +140,7 @@ void bigint_mul(bigint_p DST, bigint_p N, bigint_p M)
      * N will be used to shift M and in order to find addees */
 
     bigint_init(&PROD);
-    memcpy(&ADDEE, M, sizeof(struct bigint_t));
+    bigint_copy(&ADDEE, M);
     done_shifts = 0;
 
     for (i = 0; i < 8 * 2 * BIGINT_MAX; ++i)
@@ -133,14 +151,22 @@ void bigint_mul(bigint_p DST, bigint_p N, bigint_p M)
         /* ADDEE <- M << i
          * Shift M by i; since ADDEE is M shifted by done_shifts, it is
          * sufficiend to shift it by i - done_shifts */
-        bigint_shift(&ADDEE, &ADDEE, i - done_shifts);
+        bigint_shiftl(&ADDEE, &ADDEE, i - done_shifts);
         done_shifts = i;
 
         /* PROD <- PROD + ADDEE */
         bigint_sum(&PROD, &PROD, &ADDEE);
     }
 
-    memcpy(DST, &PROD, sizeof(struct bigint_t));
+    bigint_copy(DST, &PROD);
+}
+
+void bigint_square(bigint_p DST, bigint_p N)
+{
+    struct bigint_t M;
+
+    bigint_copy(&M, N);
+    bigint_mul(DST, N, &M);
 }
 
 void bigint_mod(bigint_p DST, bigint_p N, bigint_p M)
@@ -151,14 +177,14 @@ void bigint_mod(bigint_p DST, bigint_p N, bigint_p M)
     if (DST->overflow)
         return;
 
-    memcpy(DST, N, sizeof(struct bigint_t));
+    bigint_copy(DST, N);
 
     while (bigint_cmp(DST, M) >= 0)
     {
         /* Increasing M magnitude. */
         /* If DST->max_digit2 is surely grater than or euqal to M->max_digit.
          * Shifting by 0 is not a problem, as M is less than DST. */
-        bigint_shift(&tmpM, M, max(DST->max_digit2 - M->max_digit2 - 1, 0));
+        bigint_shiftl(&tmpM, M, max(DST->max_digit2 - M->max_digit2 - 1, 0));
 
         while (bigint_cmp(DST, &tmpM) >= 0)
             bigint_sub(DST, DST, &tmpM);
@@ -232,7 +258,7 @@ int bigint_getbit(bigint_p N, int weight)
     return *p & (1 << bit_index);
 }
 
-void bigint_shift(bigint_p DST, bigint_p N, int n)
+void bigint_shiftl(bigint_p DST, bigint_p N, int n)
 {
     int i;
 
@@ -240,7 +266,7 @@ void bigint_shift(bigint_p DST, bigint_p N, int n)
     if (DST->overflow)
         return;
 
-    memcpy(DST, N, sizeof(struct bigint_t));
+    bigint_copy(DST, N);
 
     if (n == 0)
         return;
@@ -249,6 +275,28 @@ void bigint_shift(bigint_p DST, bigint_p N, int n)
         bigint_setbit(DST, i, bigint_getbit(N, i - n));
 
     for (i = 0; i < n && i < 8 * 2 * BIGINT_MAX; ++i)
+        bigint_setbit(DST, i, 0);
+
+    bigint_set_internal(DST);
+}
+
+void bigint_shiftr(bigint_p DST, bigint_p N, int n)
+{
+    int i;
+
+    DST->overflow = N->overflow || n < 0;
+    if (DST->overflow)
+        return;
+
+    bigint_copy(DST, N);
+
+    if (n == 0)
+        return;
+
+    for (i = 0; i < 8 * 2 * BIGINT_MAX - n; ++i)
+        bigint_setbit(DST, i, bigint_getbit(N, i + n));
+
+    for (i = 8 * 2 * BIGINT_MAX - n; i < 2 * 8 * BIGINT_MAX; ++i)
         bigint_setbit(DST, i, 0);
 
     bigint_set_internal(DST);
@@ -296,20 +344,93 @@ void bigint_quotient(bigint_p DST, bigint_p N, bigint_p M)
     if (DST->overflow)
         return;
 
-    memcpy(&tmpMod, N, sizeof(struct bigint_t));
+    bigint_copy(&tmpMod, N);
     bigint_init(DST);
 
     while (bigint_cmp(&tmpMod, M) >= 0)
     {
         /* Increasing M magnitude, see bigint_mod */
         bigint_init_by_int(&w, 1);
-        bigint_shift(&tmpM, M, max(tmpMod.max_digit2 - M->max_digit2 - 1, 0));
-        bigint_shift(&w, &w, max(tmpMod.max_digit2 - M->max_digit2 - 1, 0));
+        bigint_shiftl(&tmpM, M, max(tmpMod.max_digit2 - M->max_digit2 - 1, 0));
+        bigint_shiftl(&w, &w, max(tmpMod.max_digit2 - M->max_digit2 - 1, 0));
 
         while (bigint_cmp(&tmpMod, &tmpM) >= 0)
         {
             bigint_sub(&tmpMod, &tmpMod, &tmpM);
             bigint_sum(DST, DST, &w);
+        }
+    }
+}
+
+void bigint_eec(bigint_p DST, bigint_p T, bigint_p N, bigint_p M)
+{
+    struct bigint_t r0;
+    struct bigint_t r1;
+    struct bigint_t q;
+    struct bigint_t t0; /* t coefficient t0, T will be t1 */
+    struct bigint_t t2;
+    struct bigint_t TMP;
+
+    /* r0 is the greatest number */
+    if (bigint_cmp(N, M) > 0)
+    {
+        bigint_copy(&r0, N);
+        bigint_copy(&r1, M);
+    }
+    else
+    {
+        bigint_copy(&r0, M);
+        bigint_copy(&r1, N);
+    }
+
+    bigint_init_by_int(&t0, 0);
+    bigint_init_by_int(T, 1);
+
+    while (!bigint_iszero(&r1))
+    {
+        bigint_quotient(&q, &r0, &r1);
+
+        /* Computing reminder rem = r0 - q * r1 */
+        bigint_mul(&TMP, &q, &r1);
+        bigint_sub(DST, &r0, &TMP);
+        bigint_copy(&r0, &r1);
+        bigint_copy(&r1, DST);
+
+        /* Computing t coefficient t = t - q * t */
+        bigint_mul(&TMP, &q, T);
+        bigint_sub(&t2, &t0, &TMP);
+        bigint_copy(&t0, T);
+        bigint_copy(T, &t2);
+    }
+
+    bigint_copy(T, &t0);
+    bigint_copy(DST, &r0);
+}
+
+void bigint_exp_mod(bigint_p DST, bigint_p N, bigint_p E, bigint_p M)
+{
+    struct bigint_t base;
+    struct bigint_t e;
+    struct bigint_t one;
+
+    bigint_copy(&base, N);
+    bigint_copy(&e, E);
+    bigint_init_by_int(DST, 1);
+    bigint_init_by_int(&one, 1);
+
+    while (!bigint_iszero(&e))
+    {
+        if (bigint_iseven(&e))
+        {
+            bigint_square(&base, &base);
+            bigint_shiftr(&e, &e, 1);
+            bigint_mod(&base, &base, M);
+        }
+        else
+        {
+            bigint_mul(DST, DST, &base);
+            bigint_mod(DST, DST, M);
+            bigint_sub(&e, &e, &one);
         }
     }
 }
