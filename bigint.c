@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "bigint.h"
+#include "error.h"
 
 static int CACHE_1BITS_IN_BYTE[] = {
     0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4,
@@ -364,15 +365,18 @@ void bigint_quotient(bigint_p DST, bigint_p N, bigint_p M)
 
 void bigint_eec(bigint_p DST, bigint_p T, bigint_p N, bigint_p M)
 {
-    struct bigint_t r0;
-    struct bigint_t r1;
-    struct bigint_t q;
-    struct bigint_t t0; /* t coefficient t0, T will be t1 */
-    struct bigint_t t2;
-    struct bigint_t TMP;
+    struct bigint_t  r0;
+    struct bigint_t  r1;
+    struct sbigint_t q;
+    struct sbigint_t t0; /* t coefficient t0, T will be t1 */
+    struct sbigint_t t1;
+    struct sbigint_t t2;
+    struct sbigint_t TMP;
+    int              flagNgtM; /* Flag that tells if N > M */
 
     /* r0 is the greatest number */
-    if (bigint_cmp(N, M) > 0)
+    flagNgtM = bigint_cmp(N, M) > 0;
+    if (flagNgtM)
     {
         bigint_copy(&r0, N);
         bigint_copy(&r1, M);
@@ -383,27 +387,37 @@ void bigint_eec(bigint_p DST, bigint_p T, bigint_p N, bigint_p M)
         bigint_copy(&r1, N);
     }
 
-    bigint_init_by_int(&t0, 0);
-    bigint_init_by_int(T, 1);
+    sbigint_init_by_int(&t0, 0);
+    sbigint_init_by_int(&t1, 1);
+    sbigint_init_by_int(&q, 1); /* Init.ed as 1, for it will always be >0 */
 
     while (!bigint_iszero(&r1))
     {
-        bigint_quotient(&q, &r0, &r1);
+        bigint_quotient(&q.N, &r0, &r1);
 
         /* Computing reminder rem = r0 - q * r1 */
-        bigint_mul(&TMP, &q, &r1);
-        bigint_sub(DST, &r0, &TMP);
+        bigint_mul(&TMP.N, &q.N, &r1);
+        bigint_sub(DST, &r0, &TMP.N);
         bigint_copy(&r0, &r1);
         bigint_copy(&r1, DST);
 
-        /* Computing t coefficient t = t - q * t */
-        bigint_mul(&TMP, &q, T);
-        bigint_sub(&t2, &t0, &TMP);
-        bigint_copy(&t0, T);
-        bigint_copy(T, &t2);
+        /* Computing t coefficient t[i+1] = t[i-1] - q * t[i] */
+        sbigint_mul(&TMP, &q, &t1); /* q * t[i] */
+
+        sbigint_sub(&t2, &t0, &TMP); /* t[i-1] - q * t[i] */
+
+        sbigint_copy(&t0, &t1);
+        sbigint_copy(&t1, &t2);
     }
 
-    bigint_copy(T, &t0);
+    /* Normalize t0, that at this point may be <0 */
+    while (t0.sign < 0)
+    {
+        sbigint_init_by_bigint(&t1, flagNgtM ? N : M);
+        sbigint_sum(&t0, &t0, &t1);
+    }
+
+    bigint_copy(T, &t0.N);
     bigint_copy(DST, &r0);
 }
 
@@ -433,4 +447,136 @@ void bigint_exp_mod(bigint_p DST, bigint_p N, bigint_p E, bigint_p M)
             bigint_sub(&e, &e, &one);
         }
     }
+}
+
+/* --- SBIGING IMPL */
+void sbigint_init(sbigint_p N)
+{
+    bigint_init(&N->N);
+    N->sign = 0;
+}
+
+void sbigint_init_by_int(sbigint_p N, int n)
+{
+    bigint_init_by_int(&N->N, n);
+    N->sign = n;
+}
+
+void sbigint_init_by_bigint(sbigint_p N, bigint_p M)
+{
+    bigint_copy(&N->N, M);
+    N->sign = 1;
+}
+
+void sbigint_copy(sbigint_p N, sbigint_p M)
+{
+    memcpy(N, M, sizeof(struct sbigint_t));
+}
+
+void sbigint_sum(sbigint_p DST, sbigint_p N, sbigint_p M)
+{
+    M->sign *= -1;
+    sbigint_sub(DST, N, M);
+    M->sign *= -1;
+}
+
+void sbigint_sub(sbigint_p DST, sbigint_p N, sbigint_p M)
+{
+    int flagNgtM;
+    int flagSignN;   /* true: >0, false: <0, U.B. ==0 */
+    int flagSignM;   /* true: >0, false: <0, U.B. ==0 */
+    int flagSignOUT; /* true: >0, false: <0, U.B. ==0 */
+    int noOp = 0;
+
+    if (M->sign == 0)
+    {
+        sbigint_copy(DST, N);
+        return;
+    }
+
+    if (N->sign == 0)
+    {
+        sbigint_copy(DST, M);
+        DST->sign *= -1;
+        return;
+    }
+
+    /* Now surely N and M are not 0 */
+
+    /*
+     * |N| > |M|   signN   signM   signOUT   Calc.        E.G.      = OUT     #
+     * true        + (8)   + (3)   +         |N| - |M|    8 -   3  = +(8-3)   1
+     * true        + (8)   - (3)   +         |N| + |M|    8 - (-3) = +(8+3)   2
+     * true        - (8)   + (3)   -         |N| - |M|   -8 +   3  = -(8-3)   1
+     * true        - (8)   - (3)   -         |N| + |M|   -8 - (-3) = -(8+3)   2
+     * false       + (3)   + (8)   -         |M| - |N|    3 -   8  = -(8-3)   3
+     * false       + (3)   - (8)   +         |N| + |M|    3 - (-8) = +(8+3)   2
+     * false       - (3)   + (8)   -         |M| - |N|   -3 -   8  = -(8-3)   3
+     * false       - (3)   - (8)   +         |M| - |N|   -3 - (-8) = +(8-3)   3
+     */
+
+    /* State */
+    flagNgtM  = bigint_cmp(&N->N, &M->N) > 0;
+    flagSignN = N->sign > 0;
+    flagSignM = M->sign > 0;
+
+    /* Out */
+
+    /* flagSignOUT = flagNgtM  &&  flagSignN && flagSignM  +   << Fact 1
+     *               flagNgtM  &&  flagSignN && !flagSignM +   << Fact 1
+     *               !flagNgtM &&  flagSignN && !flagSignM +   << Fact 2
+     *               !flagNgtM && !flagSignN && !flagSignM     << Fact 2
+     *
+     *             =  flagNgtM && flagSignN +                  << Fact 1
+     *               !flagNgtM && !flagSignM                   << Fact 2
+     *
+     *             = flagNgtM && flagSignN + !(flagNgtM + flagSignM)
+     */
+    flagSignOUT = (flagNgtM && flagSignN) || !(flagNgtM || flagSignM);
+
+    /* #1: flagNgtM &&  flagSignN && flagSignM +
+     *     flagNgtM && !flagSignN && flagSignM
+     *
+     *   : flagNgtM && flagSignM
+     */
+    if (flagNgtM && flagSignM)
+        noOp = 1;
+
+    /*
+     * #2:  flagNgtM &&  flagSignN && !flagSignM +   << Fact 1
+     *      flagNgtM && !flagSignN && !flagSignM +   << Fact 2
+     *     !flagNgtM &&  flagSignN && !flagSignM
+     *
+     *   :   flagNgtM && !flagSignM +
+     *      !flagNgtM &&  flagSignN && !flagSignM
+     */
+    if ((flagNgtM && !flagSignM) || (!flagNgtM && flagSignN && !flagSignM))
+        noOp = 2;
+
+    if (!noOp)
+        noOp = 3;
+
+    /* Computing */
+    DST->sign = flagSignOUT ? 1 : -1;
+
+    switch (noOp)
+    {
+    case 1:
+        bigint_sub(&DST->N, &N->N, &M->N);
+        break;
+    case 2:
+        bigint_sum(&DST->N, &N->N, &M->N);
+        break;
+    case 3:
+        bigint_sub(&DST->N, &M->N, &N->N);
+        break;
+    default:
+        EXIT(FATAL_LOGIC, "sbigint_sub", "noOp undefined");
+    }
+}
+
+void sbigint_mul(sbigint_p DST, sbigint_p N, sbigint_p M)
+{
+    DST->sign = N->sign * M->sign;
+    bigint_mul(&DST->N, &N->N, &M->N);
 }

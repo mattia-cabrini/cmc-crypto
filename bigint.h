@@ -15,10 +15,18 @@ typedef struct bigint_t
     int  max_digit2; /* Most significant non-zero bit [0,8*2*BIGINT_MAX) */
 }* bigint_p;
 
+typedef struct sbigint_t
+{
+    struct bigint_t N;
+    int             sign; /* >0, <0 or ==0 */
+}* sbigint_p;
+
 /* In all functins DST and N can overlap, but DST and M cannot, unless
  * differently stated in docs. Parameters that do not overlap with DST will
  * remain constants.
  * */
+
+/* BIGINT INTERFACE */
 
 extern void bigint_init(bigint_p N);
 extern void bigint_init_by_int(bigint_p N, int n);
@@ -70,5 +78,14 @@ extern void bigint_quotient(bigint_p DST, bigint_p N, bigint_p M);
 extern void bigint_eec(bigint_p DST, bigint_p T, bigint_p N, bigint_p M);
 
 extern void bigint_exp_mod(bigint_p DST, bigint_p N, bigint_p E, bigint_p M);
+
+/* SBIGINT INTERFACE */
+extern void sbigint_init(sbigint_p N);
+extern void sbigint_init_by_int(sbigint_p N, int n);
+extern void sbigint_init_by_bigint(sbigint_p N, bigint_p M);
+extern void sbigint_copy(sbigint_p N, sbigint_p M);
+extern void sbigint_sum(sbigint_p DST, sbigint_p N, sbigint_p M);
+extern void sbigint_sub(sbigint_p DST, sbigint_p N, sbigint_p M);
+extern void sbigint_mul(sbigint_p DST, sbigint_p N, sbigint_p M);
 
 #endif /* CMC_CRYPTO_BIGINT_H_INCLUDED */
