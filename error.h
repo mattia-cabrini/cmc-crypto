@@ -25,6 +25,12 @@
         }                                                                      \
     }
 
+#define RETERR(code)                                                           \
+    {                                                                          \
+        if ((code))                                                            \
+            return (code);                                                     \
+    }
+
 #define NN(n) __attribute__((nonnull(n)))
 
 #endif /* CMC_CRYPTO_ERROR_H_INCLUDED */

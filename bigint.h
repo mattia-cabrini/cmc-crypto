@@ -7,6 +7,11 @@
 #define BIGINT_MAX 512
 #endif
 
+/* 2*BIGINT_MAX -> Two characters for each byte
+ * +1 -> NUL-terminatore
+ */
+#define BIGINT_DUMP_SIZE (2 * BIGINT_MAX + 1)
+
 typedef struct bigint_t
 {
     byte num[2 * BIGINT_MAX]; /* Big integer represented in base 256 */
@@ -24,15 +29,35 @@ typedef struct sbigint_t
 /* In all functins DST and N can overlap, but DST and M cannot, unless
  * differently stated in docs. Parameters that do not overlap with DST will
  * remain constants.
- * */
+ *
+ * The user shall init and use (s)bigint, as if it was actually BIGINT_MAX bytes
+ * long. Exceeding BIGINT_MAX is only internally allowed to the library in order
+ * to manage big operations such as MOD_EXP.
+ */
 
 /* BIGINT INTERFACE */
 
 extern void bigint_init(bigint_p N);
 extern void bigint_init_by_int(bigint_p N, int n);
+extern void bigint_init_max(bigint_p N);
+extern void bigint_init_rand(bigint_p N, size_t max_bytes);
 extern void bigint_copy(bigint_p N, bigint_p M);
+
+/* `dumped` is assumed to have a minimum size of BIGINT_DUMP_SIZE
+ *
+ * RETURN
+ * true  -> import went fine
+ * false -> import failed
+ */
+extern int bigint_import(bigint_p N, char* dumped);
+
+/* `dst` is assumed to have a minimum size of BIGINT_DUMP_SIZE */
+extern void bigint_tostring(char* dst, bigint_p N, int base);
+
 extern int  bigint_iszero(bigint_p N);
+extern int  bigint_eq_byte(bigint_p N, byte n);
 extern int  bigint_iseven(bigint_p N);
+extern void bigint_or(bigint_p DST, bigint_p N, bigint_p M);
 extern void bigint_sum(bigint_p DST, bigint_p N, bigint_p M);
 
 /* Overlap is ok in these cases:
@@ -41,6 +66,7 @@ extern void bigint_sum(bigint_p DST, bigint_p N, bigint_p M);
  * - DST overlaps with M, but not witn N.
  */
 extern void bigint_sub(bigint_p DST, bigint_p N, bigint_p M);
+extern void bigint_sub_int(bigint_p DST, bigint_p N, int m);
 extern void bigint_mul(bigint_p DST, bigint_p N, bigint_p M);
 extern void bigint_square(bigint_p DST, bigint_p N);
 
@@ -52,7 +78,9 @@ extern void bigint_compl(bigint_p DST, bigint_p N);
 extern int bigint_cmp(bigint_p N, bigint_p M);
 
 extern void bigint_setbit(bigint_p N, int weight, int bit);
-extern int  bigint_getbit(bigint_p N, int weight);
+
+/* No check on boundaries */
+extern int bigint_getbit(bigint_p N, int weight);
 
 /* n must be >= 0; otherwise DST would overlfow */
 extern void bigint_shiftl(bigint_p DST, bigint_p N, int n);
@@ -78,6 +106,7 @@ extern void bigint_quotient(bigint_p DST, bigint_p N, bigint_p M);
 extern void bigint_eec(bigint_p DST, bigint_p T, bigint_p N, bigint_p M);
 
 extern void bigint_exp_mod(bigint_p DST, bigint_p N, bigint_p E, bigint_p M);
+extern void bigint_exp(bigint_p DST, bigint_p N, bigint_p E);
 
 /* SBIGINT INTERFACE */
 extern void sbigint_init(sbigint_p N);

@@ -1,5 +1,5 @@
-#ifndef CMC_CRYPTO_AES
-#define CMC_CRYPTO_AES
+#ifndef CMC_CRYPTO_AES_INCLUDED
+#define CMC_CRYPTO_AES_INCLUDED
 
 #include "block_cipher.h"
 
@@ -52,4 +52,4 @@ extern int aes_decrypt(
 /* DO NOT FREE */
 extern const char* aes_err(int code);
 
-#endif /* CMC_CRYPTO_AES */
+#endif /* CMC_CRYPTO_AES_INCLUDED */

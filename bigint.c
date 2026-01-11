@@ -2,6 +2,7 @@
 
 #include "bigint.h"
 #include "error.h"
+#include "random.h"
 
 static int CACHE_1BITS_IN_BYTE[] = {
     0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4,
@@ -18,8 +19,21 @@ static int CACHE_1BITS_IN_BYTE[] = {
 };
 
 /* --- HELPERS --- */
-int max(int, int);
-int max(int a, int b) { return a > b ? a : b; }
+static int max(int, int);
+static int max(int a, int b) { return a > b ? a : b; }
+
+int hex2int(char);
+int hex2int(char ch)
+{
+    if (ch >= '0' && ch <= '9')
+        return ch - '0';
+    if (ch >= 'a' && ch <= 'f')
+        return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F')
+        return ch - 'A' + 10;
+
+    return -1;
+}
 /* --- END HELPERS --- */
 
 /* --- BIGINT IMPL --- */
@@ -41,6 +55,25 @@ void bigint_init_by_int(bigint_p N, int n)
     bigint_set_internal(N);
 }
 
+void bigint_init_max(bigint_p N)
+{
+    memset(N->num, 0xff, sizeof(N->num));
+    N->overflow = 0;
+    bigint_set_internal(N);
+}
+
+void bigint_init_rand(bigint_p N, size_t max_bytes)
+{
+    /* Bytes greater than BIGINT_MAX are reserved for internal use */
+    if (max_bytes > BIGINT_MAX)
+        max_bytes = BIGINT_MAX;
+
+    random_get_buffer((char*)N->num, max_bytes);
+    memset(&N->num[max_bytes], 0, sizeof(N->num) - max_bytes);
+    bigint_set_internal(N);
+    N->overflow = 0;
+}
+
 void bigint_copy(bigint_p DST, bigint_p N)
 {
     memcpy(DST, N, sizeof(struct bigint_t));
@@ -57,7 +90,29 @@ int bigint_iszero(bigint_p N)
     return !N->num[0];
 }
 
+int bigint_eq_byte(bigint_p N, byte n)
+{
+    if (N->max_exp > 0)
+        return 0;
+
+    return N->num[0] == n;
+}
+
 int bigint_iseven(bigint_p N) { return !(N->num[0] & 1); }
+
+void bigint_or(bigint_p DST, bigint_p N, bigint_p M)
+{
+    int i;
+
+    DST->overflow = N->overflow || M->overflow;
+    if (DST->overflow)
+        return;
+
+    for (i = 0; i <= N->max_exp || i <= M->max_exp; ++i)
+        DST->num[i] = N->num[i] | M->num[i];
+
+    bigint_set_internal(DST);
+}
 
 void bigint_sum(bigint_p DST, bigint_p N, bigint_p M)
 {
@@ -109,6 +164,14 @@ void bigint_sub(bigint_p DST, bigint_p N, bigint_p M)
 
     bigint_sum(DST, N, &complM); /* Subtraction using compl. 2 */
     DST->overflow = 0;           /* Overflow is not an error */
+}
+
+void bigint_sub_int(bigint_p DST, bigint_p N, int m)
+{
+    struct bigint_t M;
+
+    bigint_init_by_int(&M, m);
+    bigint_sub(DST, N, &M);
 }
 
 void bigint_mul(bigint_p DST, bigint_p N, bigint_p M)
@@ -229,7 +292,7 @@ void bigint_setbit(bigint_p N, int weight, int bit)
     if (N->overflow)
         return;
 
-    if (weight >= 8 * 2 * BIGINT_MAX)
+    if (weight >= 8 * 2 * BIGINT_MAX || weight < 0)
     {
         N->overflow = 1;
         return;
@@ -449,6 +512,14 @@ void bigint_exp_mod(bigint_p DST, bigint_p N, bigint_p E, bigint_p M)
     }
 }
 
+void bigint_exp(bigint_p DST, bigint_p N, bigint_p E)
+{
+    struct bigint_t MAX_BIGINT;
+
+    bigint_init_max(&MAX_BIGINT);
+    bigint_exp_mod(DST, N, E, &MAX_BIGINT);
+}
+
 /* --- SBIGING IMPL */
 void sbigint_init(sbigint_p N)
 {
@@ -471,6 +542,98 @@ void sbigint_init_by_bigint(sbigint_p N, bigint_p M)
 void sbigint_copy(sbigint_p N, sbigint_p M)
 {
     memcpy(N, M, sizeof(struct sbigint_t));
+}
+
+int bigint_import(bigint_p N, char* dumped)
+{
+    int  iBuf;
+    int  iDump;
+    int  iNum;
+    int  dumpLen;
+    char buf[BIGINT_DUMP_SIZE];
+    int  tmp;
+    byte lh;
+    byte uh;
+
+    bigint_init(N);
+
+    /* Init Buf */
+    dumpLen = (int)strlen(dumped);
+
+    /* Invalid format: an odd dumpLen is not allowed as each byte must be
+     * represented by two characters */
+    if (dumpLen % 2 == 1)
+        return 0;
+
+    /* Would be out of bound */
+    if (dumpLen > 2 * BIGINT_MAX)
+        return 0;
+
+    iDump = dumpLen - 1;
+    iBuf  = 0;
+
+    while (iDump >= 0)
+    {
+        buf[iBuf] = dumped[iDump];
+
+        ++iBuf;
+        --iDump;
+    }
+
+    /* Import */
+    iNum = 0;
+    iBuf = 0;
+
+    while (iBuf < dumpLen)
+    {
+        tmp = hex2int(buf[iBuf]);
+        if (tmp < 0)
+            return 0;
+        lh  = (byte)tmp;
+
+        tmp = hex2int(buf[iBuf + 1]);
+        if (tmp < 0)
+            return 0;
+        uh = (byte)tmp;
+
+        /* Join uh and lh */
+        N->num[iNum] = (byte)(lh | (uh << 4));
+
+        iNum += 1;
+        iBuf += 2;
+    }
+
+    bigint_set_internal(N);
+
+    return 1;
+}
+
+void bigint_tostring(char* dst, bigint_p N, int base)
+{
+    int iNum = BIGINT_MAX - 1;
+    int iDst = 0;
+
+    if (base != 16)
+    {
+        strcpy(dst, "!!! unsupported base");
+        return;
+    }
+
+    if (N->overflow)
+    {
+        strcpy(dst, "!!! overflow");
+        return;
+    }
+
+    /* Exceeding BIGINT_MAX is overflow in the user context */
+    while (iNum >= 0)
+    {
+        sprintf(dst + iDst, "%02x", N->num[iNum]);
+        iNum -= 1;
+        iDst += 2;
+    }
+
+    dst[iDst] = '\0';
 }
 
 void sbigint_sum(sbigint_p DST, sbigint_p N, sbigint_p M)

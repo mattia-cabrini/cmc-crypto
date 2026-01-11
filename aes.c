@@ -431,6 +431,9 @@ static void polynom_shift(byte* DST, byte* SRC, int n)
     x <<= 8;
     x |= SRC[0];
 
+    if (n >= 32)
+        EXIT(FATAL_LOGIC, "polynom_shift", "n >= 32");
+
     x <<= n;
 
     DST[1] = (byte)(x >> 8);

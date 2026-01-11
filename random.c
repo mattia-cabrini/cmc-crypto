@@ -26,9 +26,7 @@ void random_get_buffer(char* buf, size_t size)
         return;
 
     if (fd == -1)
-    {
         random_open();
-    }
 
     for (i = 0; i < size;)
     {
