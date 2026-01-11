@@ -20,7 +20,6 @@ const char* RSA_ERR[] = {
     "rsa: could not import exponent, bigint_import failed",
     "rsa: pub-priv join failed: bit lengths not compatible",
     "rsa: pub-priv join failed: `n` not consistent",
-    "rsa: pub-priv join failed: pub. and priv. exp. not compatible with `n`"
 };
 
 char RSA_ERR_MESSAGE[2048] = {0};
@@ -64,8 +63,7 @@ static int rsa_n_exp_import(FILE* fp, rsa_key_p K, bigint_p E);
  *
  * The check process consists of:
  * - Verifying bit length equality;
- * - Verifying `n` equality;
- * - Verifying that e * d ≡ 1 mod n.
+ * - Verifying `n` equality.
  *
  * RETURN
  * RSA ERROR ENUM
@@ -100,6 +98,8 @@ static void rsa_get_prime(bigint_p N, int byte_length)
         /* Choosing u in (0, byte_length / 2] */
         random_get_buffer((char*)&u, sizeof(u));
         u %= byte_length / 2;
+        if (u < 0)
+            u += byte_length / 2;
         ++u;
 
         /* 2^u */
@@ -225,18 +225,11 @@ static int rsa_n_exp_import(FILE* fp, rsa_key_p K, bigint_p E)
 
 static int rsa_key_import_join(rsa_key_p DST, rsa_key_p pub, rsa_key_p priv)
 {
-    struct bigint_t deMODn; /* d * e % n */
-
     if (pub->bit_length != priv->bit_length)
         return RSA_ERR_IMPORT_JOIN_FAILED_BIT_LENGTH;
 
     if (bigint_cmp(&pub->n, &priv->n))
         return RSA_ERR_IMPORT_JOIN_FAILED_N;
-
-    bigint_mul(&deMODn, &pub->e, &priv->d);
-    bigint_mod(&deMODn, &deMODn, &pub->n);
-    if (!bigint_eq_byte(&deMODn, 1))
-        return RSA_ERR_IMPORT_JOIN_FAILED_MOD;
 
     bigint_copy(&DST->n, &pub->n);
     bigint_copy(&DST->e, &pub->e);
@@ -357,4 +350,24 @@ const char* rsa_err(int err)
     default:
         return RSA_ERR[err - 1];
     }
+}
+
+void rsa_encrypt(bigint_p DST, bigint_p B, rsa_key_p K)
+{
+    bigint_exp_mod(DST, B, &K->e, &K->n);
+}
+
+void rsa_decrypt(bigint_p DST, bigint_p B, rsa_key_p K)
+{
+    bigint_exp_mod(DST, B, &K->d, &K->n);
+}
+
+void rsa_sign(bigint_p DST, bigint_p B, rsa_key_p K)
+{
+    bigint_exp_mod(DST, B, &K->d, &K->n);
+}
+
+void rsa_decrypt_signed(bigint_p DST, bigint_p B, rsa_key_p K)
+{
+    bigint_exp_mod(DST, B, &K->e, &K->n);
 }

@@ -20,7 +20,6 @@ enum
     RSA_ERR_EXP_IMPORT_FAILED,
     RSA_ERR_IMPORT_JOIN_FAILED_BIT_LENGTH,
     RSA_ERR_IMPORT_JOIN_FAILED_N,
-    RSA_ERR_IMPORT_JOIN_FAILED_MOD,
 
     __rsa_err_sentinel,
     RSA_ERR_CUSTOM
@@ -75,6 +74,18 @@ extern int rsa_key_ispriv(rsa_key_p K);
  * RSA ERROR ENUM
  */
 extern int rsa_key_bit_length_supported(int size);
+
+/* Encript using public key */
+extern void rsa_encrypt(bigint_p DST, bigint_p B, rsa_key_p K);
+
+/* Decrypt using private key */
+extern void rsa_decrypt(bigint_p DST, bigint_p B, rsa_key_p K);
+
+/* Encrypt using private key */
+extern void rsa_sign(bigint_p DST, bigint_p B, rsa_key_p K);
+
+/* Decrypt using public key  */
+extern void rsa_decrypt_signed(bigint_p DST, bigint_p B, rsa_key_p K);
 
 /* Do not free */
 extern const char* rsa_err(int code);

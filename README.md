@@ -22,7 +22,7 @@ CMC-Crypto is not production-grade software.
 
 ### RSA
 
-- [DONE] Key pair generation;
+- [....] Key pair generation;
 - [TODO] Padding using PKCS#1;
 - [TODO] Encryption;
 - [TODO] Decryption;
